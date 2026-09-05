@@ -1,0 +1,223 @@
+====================================================================================================
+[fetch-result #6] quality=primary date=
+
+- CLAIM: The Meshtastic Android app can connect to a LoRa mesh node (e.g., an ESP32-based device) over USB Serial or Bluetooth, confirming that a phone-to-embedded-radio bridge over Bluetooth or USB serial is an already-proven, open-source deployment pattern directly reusable for the SIH26173 'stream text to an embedded device' requirement.
+  QUOTE: Open the app, connect to the device from your phone over USB Serial or Bluetooth. Once paired and connected...
+
+- CLAIM: Meshtastic supports three phone/client-to-node connection transports — Bluetooth (Android App, Web Client), Serial/USB (Python CLI, Web Client, Android App), and Network WiFi/TCP — with the WiFi/TCP network connection limited to ESP32 devices only.
+  QUOTE: Network (WiFi/TCP): Limited to ESP32 devices; supports Web Client, Android App, iOS App, and Python CLI
+
+- CLAIM: Sub-GHz LoRa deployments in EU-style regulatory bands operate under a 10% hourly duty-cycle cap (e.g., EU 868 at 869.4-869.65 MHz, 27 dBm), a concrete regulatory constraint illustrating why bytes-per-message budgets matter on low-bitrate LoRa links of the kind an iTantra ESP32/LoRa bridge would use (India's 865-867 MHz ISM band is similarly constrained).
+  QUOTE: EU_433 and EU_868 have to adhere to an hourly duty cycle limitation of 10%
+
+- CLAIM: Meshtastic clients exist across Android, iOS/iPadOS, macOS, Web, and Python CLI, indicating a mature multi-platform open-source offline-mesh ecosystem that constitutes prior art / competition landscape for any SIH walkie-talkie-over-LoRa extension.
+  QUOTE: Android App (all connection types); iOS/iPadOS App (network and Bluetooth); macOS App (network connections); Web Client (all connection types); Python CLI (serial and network)
+
+- CLAIM: The Meshtastic initial-configuration page documents regional frequency allocations (e.g., US 902.0-928.0 MHz at 30 dBm, 100% duty cycle) but does NOT document message size limits or link bitrates, so those numbers must be sourced from other Meshtastic/LoRa documentation rather than this page.
+  QUOTE: Message limits and bitrates are not documented on this page.
+====================================================================================================
+[fetch-result #7] quality=primary date=2026-08-14
+
+- CLAIM: Android's Wi-Fi Direct (P2P) APIs let two phones connect and exchange data directly over Wi-Fi with no access point or internet, satisfying the SIH26173 requirement for fully offline phone-to-phone text streaming.
+  QUOTE: Wi-Fi Direct (P2P) allows devices with the appropriate hardware to connect directly to each other via Wi-Fi without an intermediate access point.
+
+- CLAIM: Wi-Fi Direct offers faster throughput and longer range than Bluetooth, making it the higher-bandwidth of the two offline transports the problem statement allows (WiFi/Bluetooth).
+  QUOTE: communicate over a speedy connection across distances much longer than a Bluetooth connection
+
+- CLAIM: Wi-Fi P2P is supported from API level 14 (Android 4.0), so essentially every low/mid-range Android phone in India can run it, and data transfer is done over ordinary TCP sockets (server on the group owner, e.g. port 8888) rather than any proprietary protocol.
+  QUOTE: <uses-sdk android:minSdkVersion="14" />
+====================================================================================================
+[fetch-result #8] quality=primary date=2026-08-14
+
+- CLAIM: Wi-Fi Aware lets Android devices running Android 8.0 (API level 26) or higher discover and connect directly to each other with no access point, internet, or any other connectivity — a fully offline peer-to-peer transport suitable for the SIH26173 phone-to-phone text link.
+  QUOTE: Wi-Fi Aware capabilities enable devices running Android 8.0 (API level 26) and higher to discover and connect directly to each other without any other type of connectivity between them.
+
+- CLAIM: Wi-Fi Aware's connectionless sendMessage() path is limited to roughly 255 bytes per message and offers no delivery, ordering, or de-duplication guarantees — so transcribed sentences either need compression to fit this budget plus an app-level ack scheme, or a socket-based data path instead.
+  QUOTE: Messages are generally used for lightweight messaging, as they might not be delivered (or be delivered out-of-order or more than once) and are limited to about 255 bytes in length.
+
+- CLAIM: Beyond short messages, Wi-Fi Aware supports full bidirectional client-server networking between two devices using standard TCP sockets (ServerSocket/Socket over IPv6), which provides a reliable stream channel for continuous STT-text transfer.
+  QUOTE: Wi-Fi Aware supports client-server networking between two Wi-Fi Aware devices.
+
+- CLAIM: Wi-Fi Aware network connections deliver higher throughput over longer range than Bluetooth connections, which is the documented basis for preferring it over BT Classic/BLE when both phones support it.
+  QUOTE: Wi-Fi Aware network connections support higher throughput rates across longer distances than Bluetooth connections.
+
+- CLAIM: Wi-Fi Aware is optional hardware (apps must check PackageManager.FEATURE_WIFI_AWARE) and can become unavailable at runtime when the user disables Wi-Fi or Location — a practical risk on the low/mid-range phones targeted by SIH26173, so a fallback transport (Wi-Fi Direct or Bluetooth) is needed.
+  QUOTE: Wi-Fi Aware may exist on the device, but may not be currently available because the user has disabled Wi-Fi or Location.
+====================================================================================================
+[fetch-result #9] quality=blog date=2019-09-24
+
+- CLAIM: The default BLE ATT MTU is only 23 bytes (fitting one Link Layer packet), while the spec allows negotiating up to a 512-byte ATT payload — so an un-negotiated GATT link carries at most ~20 usable bytes per write/notification after the 3-byte ATT header, which is why short-string compression of Indic Unicode text matters per-packet.
+  QUOTE: 23 bytes (which allows the packet to fit in one LL packet) ... 3 bytes of ATT packet overhead
+
+- CLAIM: Theoretical BLE application throughput ranges from ~0.226 Mbps (BLE 4.0, 1M PHY, default 23-byte MTU) through ~0.803 Mbps (BLE 4.2 with 251-byte Data Length Extension) to ~1.434 Mbps (BLE 5.0, 2M PHY + DLE) — all vastly exceeding the bytes-per-second needed to stream sentence text, validating text-over-BLE as a transport for the walkie-talkie app.
+  QUOTE: With 251-byte payload: "~0.803 Mbps" ... BLE 5.0 (2M PHY + Data Length Extension): With 251-byte payload: "~1.434 Mbps"
+
+- CLAIM: Real-world phone throughput is far below theoretical: most iOS devices support a 185-byte MTU, 7 packets per connection interval, and a 15 ms minimum connection interval, yielding about 12.2 kBytes/sec (~0.10 Mbps) achievable GATT throughput — a realistic planning number for phone-to-phone or phone-to-ESP32 BLE links.
+  QUOTE: Most iOS devices support a 185 byte MTU and 7 packets per connection interval
+
+- CLAIM: The BLE connection interval is bounded between 7.5 ms and 4 s, and a device limited to one packet per connection event achieves only ~0.029 Mbps even at the fastest 7.5 ms interval — connection-parameter negotiation, not radio bitrate, dominates worst-case latency and throughput for short text messages.
+  QUOTE: Some older devices only support one packet per connection interval
+
+- CLAIM: Per-exchange protocol overhead is concrete and large at small payloads: a BLE 4.0 single-packet exchange takes 708 μs (328 μs data + 150 μs T_IFS + 80 μs ACK + 150 μs T_IFS) to move 27 payload bytes, with 4 bytes L2CAP overhead per packet, capping Link Layer data throughput at ~0.381 Mbps on a 1 Mbps radio.
+  QUOTE: 328μs data packet + 150μs T_IFS + 80μs ACK + 150μs T_IFS = 708μs
+====================================================================================================
+[fetch-result #10] quality=blog date=2019 (approximate; inferred from earliest comment timestamps, not an explicit byline date)
+
+- CLAIM: ESP32 Bluetooth Classic serial (SPP-style) communication can be implemented in the Arduino IDE using the BluetoothSerial library, with the device advertised under a chosen name via SerialBT.begin(), making the ESP32 usable as a wireless serial bridge for text data from a phone.
+  QUOTE: SerialBT.begin("ESP32test"); //Bluetooth device name
+
+- CLAIM: An Android phone can pair with the ESP32 over Bluetooth Classic and exchange text bidirectionally using the free 'Serial Bluetooth Terminal' app from the Google Play Store, with standard serial-style read/write calls (SerialBT.write, SerialBT.read, SerialBT.available) on the ESP32 side — demonstrating a working phone-to-embedded-device text channel of the kind SIH26173 requires for streaming STT output to an embedded device.
+  QUOTE: Users pair via the Serial Bluetooth Terminal Android app (available on Google Play Store). The device appears in the app's pairing list after enabling phone Bluetooth.
+
+- CLAIM: This ESP32 Bluetooth Classic approach works only with Android smartphones, not iPhones — a real constraint for the transport layer, since iOS lacks general Bluetooth Classic SPP support (an Android-only limitation that is acceptable for SIH26173, which mandates an Android app).
+  QUOTE: this project is only compatible with Android smartphones.
+
+- CLAIM: The demo parses incoming Bluetooth text as newline-delimited messages (accumulating characters until '\n'), i.e. a simple line-based framing protocol suitable for sending sentence-at-a-time text — the same message-framing pattern an STT-to-embedded-device link would use.
+  QUOTE: if (incomingChar != '\n'){ message += String(incomingChar); }
+
+- CLAIM: The tutorial's wired serial monitor link runs at 115200 baud (Serial.begin(115200)), which bounds the demonstrated bridge throughput at roughly 11.5 KB/s on the UART side — far more than needed for compressed sentence text.
+  QUOTE: Serial.begin(115200)
+====================================================================================================
+[fetch-result #12] quality=forum date=2026-02-21 (discussion opened; follow-up posts through 2026-02-24)
+
+- CLAIM: Neither Dolphin nor Whisper models under sherpa-onnx automatically detect language changes mid-stream, so a multilingual app must select or detect the language per utterance itself (relevant to handling 10 languages and code-mixing in the SIH app).
+  QUOTE: Neither Dolphin nor Whisper will automatically detect language changes mid-stream.
+====================================================================================================
+[fetch-result #13] quality=primary date=not stated on page (actively maintained repository; paper DOI 10.6084/m9.figshare.17056334.v2)
+
+- CLAIM: Unishox2 is a hybrid encoder purpose-built for compressing short Unicode strings individually, combining entropy coding (fixed prefix-free codes per letter), dictionary coding (repeating letter sets), and delta coding for Unicode characters — the exact regime needed for sentence-length Indic text messages, where general-purpose compressors fail.
+  QUOTE: "A hybrid encoder for Short Unicode Strings" ... uses "entropy, dictionary and delta coding" ... "In general compression utilities such as zip, gzip do not compress short strings well and often expand them."
+
+- CLAIM: Unishox2 supports the entire Unicode character set with UTF-8 as input and output encoding, using delta coding for non-Latin code points — meaning Devanagari, Dravidian, Odia and Bengali scripts can be compressed, though the README itself publishes no per-script compression-ratio benchmarks (numbers live in the linked figshare paper, not the repo page).
+  QUOTE: "Unishox supports the entire Unicode character set. As of now it supports UTF-8 as input and output encoding." ... "For Unicode characters, delta coding is used."
+
+- CLAIM: Unishox2 explicitly targets low-bitrate radio links and constrained embedded devices — its stated applications include text transfer over LoRa and BLE and use on Arduino/ESP8266-class hardware — which matches SIH26173's WiFi/Bluetooth-to-embedded-device transport requirement and an ESP32/LoRa bridge design.
+  QUOTE: "Faster transfer of text over low-speed networks such as LORA or BLE" and "Compression for low memory devices such as Arduino and ESP8266"
+
+- CLAIM: Unishox2 is Apache-2.0 licensed and is already integrated into real deployed low-bitrate systems, including the Meshtastic LoRa mesh project and Tasmota/ESP32 SQLite extensions — satisfying the hackathon's open-source-only restriction and providing field-proven prior art for text-over-tiny-links.
+  QUOTE: License: "Apache-2.0" (repository footer); listed integrations include "Sqlite3 extensions for ESP32/ESP8266, Tasmota integration, Python bindings, the Meshtastic project"
+
+- CLAIM: Unishox2 is validated against a multilingual test corpus and formally described in a citable paper, but is only effective on small payloads — the author states it is good up to a few kilobytes and poor on large or binary files, so it fits per-sentence STT output framing but not bulk transfer; official ports cover C/C++, Python, and JavaScript, with no first-party Java/Android binding listed (a JNI wrapper would be needed for the Android app).
+  QUOTE: "tests all the features of Unishox2, including edge cases, using 159 strings covering several languages, emojis and binary data" ... "Unishox is good for text content upto few kilobytes. Unishox does not give good ratios compressing large files or binary files." Paper: "A hybrid encoder for compressing Short Unicode Strings", DOI 10.6084/m9.figshar
+====================================================================================================
+[fetch-result #16] quality=primary date=?
+
+- CLAIM: Meshtastic's Store & Forward server role is restricted to ESP32-based nodes with onboard PSRAM (e.g., T-Beam, T3S3) — ordinary phones or non-PSRAM nodes cannot serve stored messages, a hardware gap a phone-based SIH solution could exploit for store-and-forward relay.
+  QUOTE: Only ESP32 based devices with onboard PSRAM like the T-Beam and T3S3 can be a Store & Forward Server
+
+- CLAIM: The module's purpose is retransmission of missed text messages to clients that temporarily left LoRa range, i.e., Meshtastic already implements text-only store-and-forward over low-bitrate links (prior art for the mesh-relay/QoS differentiation angle).
+  QUOTE: ask a special Store & Forward Server to resend text messages after the client has been temporarily not in LoRa range of the mesh
+
+- CLAIM: Meshtastic's store-and-forward has no per-client delivery tracking, so clients can receive duplicate messages — a reliability/deduplication gap a differentiated solution (message IDs, ACK-based sync) could address.
+  QUOTE: The server does not know which messages the client device actually missed, so it is possible that you receive duplicates.
+====================================================================================================
+[fetch-result #20] quality=primary date=
+
+- CLAIM: Kenpath's Indic Text Normalization is an open-source WFST-based library built on Pynini that converts numbers, dates, currency, and measurements into spoken form for TTS/ASR pipelines — directly addressing the number/date normalization gap for Indic TTS identified as a differentiation opportunity for SIH26173.
+  QUOTE: A comprehensive WFST-based library built on Pynini that converts numbers, dates, currency, measurements and more into natural spoken form.
+
+- CLAIM: The library covers all 9 Indic languages required by SIH26173 plus English (IN): its 19 supported languages include Hindi, Bengali, Marathi, Telugu, Kannada, Tamil, Malayalam, Gujarati, and Odia is NOT listed — meaning Odia normalization would need custom work in a solution built on this library.
+  QUOTE: Hindi, Bengali, Marathi, Telugu, Kannada, Tamil, Malayalam, Gujarati, Punjabi, Assamese, Nepali, Sanskrit, Maithili, Bhojpuri, Magahi, Chhattisgarhi, Bodo, Dogri, and English (IN).
+
+- CLAIM: The library claims 1-5 ms average normalization latency on CPU with deterministic output, versus ~500 ms for local LLM approaches and ~2000 ms for API-based approaches — making it viable for the low-latency, offline, CPU-only constraints of the SIH26173 problem.
+  QUOTE: 1 – 5 ms average normalization latency
+
+- CLAIM: The library is licensed under Apache 2.0 and hosted on GitHub (github.com/kenpath/indic-text-normalization), satisfying SIH26173's open-source-only restriction, and is positioned as an extension of NVIDIA NeMo's text normalization for Indic languages.
+  QUOTE: Open source under Apache 2.0.
+====================================================================================================
+[fetch-result #21] quality=primary date=2022-09-18
+
+- CLAIM: Conventional TTS text normalization pipelines cannot handle code-switched Indic text (Malayalam-English), and as of 2022 no normalization modules existed for Malayalam-English code-switched social media input — evidence that code-mixing handling is a genuine gap an SIH solution can differentiate on.
+  QUOTE: To the best of our knowledge, there exist no normalization modules that can handle Malayalam-English code-switched input social media text.
+
+- CLAIM: The paper's two-stage normalization approach (Stage 1: Unicode-range script detection, punctuation/letter-case correction, English dictionary lookup; Stage 2: Finite State Transducer-based Malayalam normalizer for romanized and intra-word code-switched words) achieved 87.5% average word-level accuracy against a manually normalized reference, with per-category accuracy of 85% (English words), 100% (Malayalam words), 81% (Malayalam in English script), 87% (intra-word code-switched), 75% (special characters).
+  QUOTE: Total average accuracy of 87.5% was obtained.
+
+- CLAIM: Text normalization measurably improves code-switched TTS quality: their Tacotron 2-based TTS fed normalized input scored MOS 3.82 (30 listeners, 30 sentences), beating two existing monolingual Malayalam TTS systems (MOS 3.3 and 3.25) given non-normalized transliterated code-switched input.
+  QUOTE: A mean opinion score of 3.82 was obtained for the TTS output based on our developed text normalization module.
+
+- CLAIM: Malayalam's abugida properties (15 vowels, 36 consonants, inherent vowel after each consonant, high agglutination, and no phoneme-set overlap subset relation with English) make phonetic sub-unit splitting with inherent-vowel restoration necessary for normalizing romanized Malayalam — a script-specific complication any 10-language Indic TTS front-end must engineer around.
+  QUOTE: Malayalam words have high level of agglutination and vowel missing in this make text normalization more challenging.
+====================================================================================================
+[fetch-result #22] quality=secondary date=2024-01-23
+
+- CLAIM: ISRO developed the second-generation Distress Alert Transmitter (DAT-SG) as a UHF transmitter built on a NavIC receiver module, giving it satellite-based messaging over India's own navigation constellation.
+  QUOTE: ISRO has developed the DAT-SG which is a UHF (Ultra High Frequency) transmitter based on the NavIC (Navigation in Indian Constellation) receiver module.
+
+- CLAIM: Unlike the one-way first-generation DAT, the DAT-SG supports two-way communication and can receive messages from the control centre (e.g., weather and emergency alerts, Potential Fishing Zone info), demonstrating ISRO's operational low-bitrate text-message downlink to end users.
+  QUOTE: equipped with the capability to receive messages from the control centre
+
+- CLAIM: The DAT-SG connects to fishermen's mobile phones over Bluetooth so satellite-delivered messages are read on the phone — a real deployed instance of the phone-plus-embedded-device-over-Bluetooth architecture that SIH26173's transceiver bridging targets.
+  QUOTE: capability to receive messages on their mobile devices
+
+- CLAIM: More than 20,000 first-generation DAT units are in use, with the system operational since 2010 and distress messages routed via satellite to the Indian Mission Control Centre (INMCC) and onward to Maritime Rescue Coordination Centres.
+  QUOTE: Till now, more than 20,000 DATs are being used.
+
+- CLAIM: The DAT ecosystem is managed through a central web-based network management platform called SAGARMITRA and the DAT-SG service is declared operational 24x7.
+  QUOTE: declared operational on a 24x7 basis
+====================================================================================================
+[fetch-result #24] quality=secondary date=2019-10-10
+
+- CLAIM: GEMINI (GAGAN Enabled Mariner's Instrument for Navigation & Information) is a portable satellite receiver developed by INCOIS in collaboration with the Airports Authority of India, using ISRO/AAI's GAGAN satellite system, to push emergency alerts and ocean information to fishermen — a concrete ISRO-ecosystem precedent for the satellite-based, low-bitrate message dissemination context behind SIH26173/iTantra.
+  QUOTE: Indian National Centre for Ocean Information Services (INCOIS) in collaboration with the Airports Authority of India (AAI)... utilizing the GAGAN (GPS Aided Geo Augmented Navigation) satellite... a portable receiver that is linked to ISRO-satellites.
+
+- CLAIM: GEMINI supports only one-way (broadcast) communication and cannot be used by fishermen to make calls — a documented gap that motivates iTantra-style solutions where speech is converted to compact text for two-way exchange over constrained links, and explains the problem statement's emphasis on non-interruptible, highest-volume alert announcements (alerts arrive as one-way broadcast messages).
+  QUOTE: The drawback of this device is that it only allows one-way communication, i.e, it can't be used by fishermen to make calls.
+
+- CLAIM: GEMINI extends alert reach to about 300 nautical miles offshore, versus roughly 10-12 km of cellular coverage — quantifying the last-mile coverage gap that satellite/low-bitrate text messaging fills for Indian fishermen, which is the real-world deployment scenario a non-generic SIH26173 solution should cite.
+  QUOTE: The device can send signals up to 300 nautical miles... fishermen outside the signal range of their phone companies (i.e. 10-12 km).
+
+- CLAIM: GEMINI's payload types are safety-critical short messages — emergency information, Ocean State Forecasts, and Potential Fishing Zone advisories — i.e., exactly the class of text-sized alert content that a TTS mode in an iTantra-style app would need to voice in local languages for low-literacy end users.
+  QUOTE: effective dissemination of emergency information and communication on Ocean States Forecast and mapping of Potential Fishing Zones (PFZ) to fishermen.
+
+- CLAIM: GEMINI hardware cost about Rs 9,000 per device in 2019 with plans for up to 90% subsidy — evidence that the target user base is cost-sensitive, supporting the problem statement's requirement that the software run on low/mid-range phones rather than dedicated hardware.
+  QUOTE: Priced at ₹9,000 per device. The attempts are being made to subsidize it by as much as 90%.
+====================================================================================================
+[fetch-result #25] quality=primary date=2023 (paper accepted at ICASSP 2023; repo checkpoints released under v1-checkpoints-release)
+
+- CLAIM: Trained model weights and config files for all languages are publicly downloadable from the GitHub release tagged v1-checkpoints-release, and the models are also open-sourced on India's Bhashini platform; the repository metadata lists an MIT license, satisfying SIH26173's open-source-only restriction (though the README itself contains no explicit license statement).
+  QUOTE: Trained model weight and config files can be downloaded at [this link.](https://github.com/AI4Bharat/Indic-TTS/releases/tag/v1-checkpoints-release)
+====================================================================================================
+[fetch-result #26] quality=primary date=?
+
+- CLAIM: int8 quantization roughly triples compression of VITS TTS models in sherpa-onnx: the VCTK English model shrinks from 116 MB (fp32) to 37 MB (int8), a concrete data point for quantization gains cited in the research question.
+  QUOTE: VCTK (English, 109 speakers): 116 MB (primary), 37 MB (int8 quantized version)
+====================================================================================================
+[fetch-result #27] quality=primary date=2022-10
+
+- CLAIM: NavIC provides a satellite short messaging service for users in the Indian region specifically targeting places where cellular or internet communication is unreachable (open seas, remote terrains) — the exact low-bitrate, offline-last-mile context that motivates SIH26173's text-over-link (rather than voice-over-link) design.
+  QUOTE: NavIC is offering short messaging service for the users in the Indian region. End-users located at remote places where cellular or internet based communication are difficult to reach (eg. Open seas, remote terrains etc.) benefit from messaging service via NavIC satellites.
+
+- CLAIM: The NavIC messaging service is operationally used by INCOIS to broadcast Potential Fishing Zone messages, cyclone and high-wave alerts, and tsunami early warnings to fishermen, and these alert messages are displayed on receivers/phones in regional Indian languages — a live deployment of multilingual text alerts that an offline Indic TTS app would voice.
+  QUOTE: Messaging service is presently being used by INCOIS for broadcasting Potential Fishing Zone (PFZ) messages, Cyclone & High wave alerts etc. to fishermen across the country. ... NavIC Messaging Service is used as a means to broadcast these information to fishermen. The information is displayed in the regional languages for convenience.
+
+- CLAIM: NavIC messaging is a prioritized, time-shared broadcast channel (currently via satellites 1A & 1E) where disaster-warning and distress-alert messages get highest priority and are broadcast by multiple satellites, and the byte-level Signal-in-Space ICD for the INCOIS and SG-DAT message service is publicly available at www.isro.gov.in/irnss-programme — grounding for a message-priority QoS feature (non-interruptible max-volume alerts) and for byte-budget compression design.
+  QUOTE: The messaging channel is used in time-shared mode and preference is given to the users based on the priority of the applications. Priorities are allocated to certain users based on applications like disaster warning, distress alerts etc. High priority messages shall be broadcast by multiple satellites so that requests are quickly serviced. ... SIS 
+
+- CLAIM: ISRO's Second Generation Distress Alert Transmitters (SG-DAT) for fishermen use NavIC's forward channel to deliver acknowledgments to users in distress (uplink distress via UHF SARSAT on INSAT-3DR/GSAT-17, downlink ack via NavIC message), with 50 second-generation Distress Alert Terminal units ready and trials underway with the Indian Coast Guard as of Oct 2022 — a concrete embedded-terminal ecosystem an iTantra phone app could bridge to.
+  QUOTE: Forward channel communication support to send acknowledgment to users in distress as a part of Second Generation Distress Alert Transmitters (SG -DAT) is being exercised. ... 50 units of second generation Distress Alert Terminals are kept ready. Trial with the support of Indian coast guard is going ON.
+
+- CLAIM: The service carries real operational traffic (since Jan 2022: 10,853 PFZ segment messages, 104 high-wave alerts, 325 SG-DAT acknowledgments, 52 cyclone alert messages), a Common Alerting Protocol (CAP) integration combining alerts from IMD/CWC/SASE for common broadcast was in end-to-end testing, and received messages are displayed 'on mobile phone or integrated device' via NavIC Messaging Receivers — evidence of message volumes and a phone-plus-embedded-receiver architecture matching the problem statement's two-device topology.
+  QUOTE: Total 10853 segment messages for PFZ (Potential Fishing Zone) were broadcasted. Total 104 High wave alerts were disseminated. Total 325 SG-DAT acknowledgment messages were transmitted. Total 52 different messages were transmitted as cyclone alerts. ... A Common Alert Protocol (CAP) is being developed for combining all Alerts for common broadcast. .
+====================================================================================================
+[fetch-result #28] quality=primary date=2019-12-09
+
+- CLAIM: NavIC's satellite text-messaging channel (message Type 18, broadcast via the dedicated NavIC 1A satellite on L5 1176.45 MHz and S 2492.028 MHz) carries only 220 bits of message data per 292-bit sub-frame at a 50 sps navigation data rate, with total message length limited to 220-2220 bits (about 27-277 bytes) via fragmentation across frames — a concrete bytes-per-message budget that motivates transmitting compressed text rather than audio over such links.
+  QUOTE: Each sub-frame of 292 bits contains 220 bits of message data. Message data length can be ranging from 220 bits to 2220 bits. For messages exceeding the 220 bits, the longer message is fragmented and sent in the subsequent frames.
+
+- CLAIM: ISRO's NavIC Messaging Receiver for fishermen already uses the exact architecture SIH26173 asks for: an embedded satellite receiver linked over Bluetooth to the user's cell phone, an audio alarm, 5-day battery capacity, and a mobile app that delivers audio/visual alerts in 13 different regional languages — establishing precedent for multilingual phone-plus-embedded-device alert delivery over short-range wireless.
+  QUOTE: It has Bluetooth connectivity with user Cell phone and audio alarm with 5 days battery capacity ... Mobile app supporting audio/visuals alerts for Fisherman in 13 different regional languages
+
+- CLAIM: ISRO's MSS network for tracking sub-20m boats (via GSAT-6) operates satellite terminals with a 9.6 kbps forward link and 2.4 kbps return link using dynamic TDMA, exposes a Bluetooth/Wi-Fi interface to a mobile app (Nabhmitra), and had 960+ terminals fitted in Tamil Nadu, Gujarat and Puducherry with the hub at ISRO Ahmedabad — concrete kbps figures for the real low-bitrate links an iTantra text stream must fit within.
+  QUOTE: Salient Features of terminal: Forward Link: 9.6kbps, Return Link: 2.4kbps, Channel Access: Dynamic TDMA, In built GAGAN/NavIC for position, Bluetooth/Wi-Fi Interface ... The HUB / Control centre is at ISRO, Ahmedabad & 960+ terminals are fitted in Tamilnadu, Gujarat states and Puducherry UT
+
+- CLAIM: NavIC messaging natively supports priority-scheduled message classes, and INCOIS is allocated Message IDs 20 (Potential Fishing Zones, 9 PFZs per sub-frame) and 21 (emergency), with Msg 21 subdivided by service IDs for High Wave Alert (0111), Cyclone Alert (1111) and Tsunami Alert (0011) — a real-world taxonomy of alert-type messages that maps directly onto SIH26173's requirement that alert messages be announced at highest volume and be non-interruptible.
+  QUOTE: Different types of services can be given different priorities since messages are scheduled based on priority. ... Emergency messages– Msg21 which further divided with service IDs: High Wave Alert Service ID 0111, Cyclone Alert Service ID 1111, Tsunami Alert Service ID 0011
+
+- CLAIM: The Distress Alert Transmitter (DAT) for emergency reporting by fishermen uses the DRT transponder of INSAT at 402.65-402.67 MHz, supports only six manually-activated message types sent one-way with position, and is being upgraded (DAT-2G) by combining with NavIC messaging to add message acknowledgement and limited short messaging from fisherman to hub — showing ISRO's existing distress channel is extremely constrained and text-only.
+  QUOTE: For Emergency Reporting by Fishermen using DRT transponder of INSAT (402.65-402.67 MHz). Six types of messages based on Manual Activation ... It is one way in nature ... Being upgraded by combining with NavIC Messaging service. Message Acknowledgement using NavIC Messaging ... Limited Short Messaging Possible from fisherman to HUB
+====================================================================================================
+[fetch-result #29] quality=primary date=2023-06-22 (repo created); continuously updated, last modified 2026-09-04
+
+- CLAIM: Every available Indic Piper voice exists only at the 'medium' quality tier, sampled at 22,050 Hz, with ONNX model files of roughly 63-77 MB each: hi_IN-pratham-medium.onnx 63.5 MB, bn_BD-google-medium.onnx 76.8 MB, ml_IN-meera-medium.onnx 63.0 MB, mr_IN-google-medium.onnx 76.8 MB, te_IN-maya-medium.onnx 63.0 MB — no smaller x_low/low variants exist for these languages, so 6 languages of Piper TTS alone would total roughly 400 MB uncompressed.
+  QUOTE: hi_IN-pratham-medium.onnx  63.5 MB ... Quality: medium * Samplerate: 22,050Hz

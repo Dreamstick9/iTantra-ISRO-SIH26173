@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Build / Gradle
+.gradle/
+build/
+*/build/
+*/*/build/
+*.hprof
+local.properties
+.idea/
+*.iml
+*.ap_
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Archives & Temp
+*.zip
+.tempmediaStorage/
+scratch/
