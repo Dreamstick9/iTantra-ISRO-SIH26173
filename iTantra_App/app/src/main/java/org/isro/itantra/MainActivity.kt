@@ -21,29 +21,34 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -57,6 +62,7 @@ import org.isro.itantra.ui.PttState
 import org.isro.itantra.ui.components.AmplitudeVisualizer
 import org.isro.itantra.ui.components.PttButton
 import org.isro.itantra.ui.components.TelemetryCard
+import org.isro.itantra.ui.components.TtsControlCard
 import org.isro.itantra.ui.theme.ITantraTheme
 
 class MainActivity : ComponentActivity() {
@@ -96,6 +102,14 @@ fun MainScreen(viewModel: MainViewModel) {
     val stats by viewModel.telemetryStats.collectAsState()
     val hasAudio by viewModel.hasRecordedAudio.collectAsState()
 
+    // Milestone 2 TTS States
+    val selectedLanguage by viewModel.selectedLanguage.collectAsState()
+    val ttsInputText by viewModel.ttsInputText.collectAsState()
+    val isSynthesizing by viewModel.isSynthesizing.collectAsState()
+    val isPlayingTts by viewModel.isPlayingTts.collectAsState()
+
+    var selectedTabIndex by remember { mutableIntStateOf(1) } // Default to M2 TTS Station
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = Color(0xFF0A0F1D)
@@ -104,9 +118,9 @@ fun MainScreen(viewModel: MainViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Header: Title & Badges
             Column(
@@ -121,130 +135,184 @@ fun MainScreen(viewModel: MainViewModel) {
                         imageVector = Icons.Default.Radio,
                         contentDescription = null,
                         tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "iTantra",
                         color = Color.White,
-                        fontSize = 24.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "ISRO SIH26173 • Offline Neural Transceiver",
+                    text = "ISRO SIH26173 • Offline Neural Walkie-Talkie",
                     color = Color(0xFF94A3B8),
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    StatusBadge(text = "MILESTONE 1", color = Color(0xFF38BDF8))
-                    StatusBadge(text = "16kHz PCM", color = Color(0xFF4ADE80))
-                    StatusBadge(text = "LOW LATENCY", color = Color(0xFFFB923C))
+                    StatusBadge(text = "M1: MIC I/O", color = Color(0xFF38BDF8))
+                    StatusBadge(text = "M2: OFFLINE TTS", color = Color(0xFF4ADE80))
+                    StatusBadge(text = "ZERO CLOUD", color = Color(0xFFFBBF24))
                 }
             }
 
-            // Middle Section: Telemetry HUD or Permission Rationale
-            if (!hasRecordPermission) {
-                PermissionCard(
-                    onRequestPermission = {
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Dual-Station Mode Tabs
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                containerColor = Color(0xFF0F172A),
+                contentColor = Color(0xFF38BDF8),
+                indicator = { tabPositions ->
+                    TabRowDefaults.SecondaryIndicator(
+                        Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                        color = Color(0xFF38BDF8)
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(10.dp))
+            ) {
+                Tab(
+                    selected = selectedTabIndex == 0,
+                    onClick = { selectedTabIndex = 0 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("PTT Transceiver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 )
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    TelemetryCard(stats = stats)
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Waveform visualizer
-                    Text(
-                        text = when (pttState) {
-                            PttState.RECORDING -> "LIVE MICROPHONE INPUT"
-                            PttState.PLAYING -> "AUDIO PLAYBACK IN PROGRESS"
-                            PttState.IDLE -> "AUDIO ENGINE READY"
-                        },
-                        color = when (pttState) {
-                            PttState.RECORDING -> Color(0xFFEF4444)
-                            PttState.PLAYING -> Color(0xFF10B981)
-                            PttState.IDLE -> Color(0xFF64748B)
-                        },
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    AmplitudeVisualizer(
-                        amplitudeProvider = { amplitude },
-                        barColor = if (pttState == PttState.RECORDING) Color(0xFFEF4444) else Color(0xFF38BDF8),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .background(Color(0xFF0F172A), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
+                Tab(
+                    selected = selectedTabIndex == 1,
+                    onClick = { selectedTabIndex = 1 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Indic TTS Station", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                )
             }
 
-            // Bottom Section: Push-To-Talk Control & Replay
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (hasRecordPermission) {
-                    PttButton(
-                        pttState = pttState,
-                        amplitudeProvider = { amplitude },
-                        onPttDown = { viewModel.onPttDown() },
-                        onPttUp = { viewModel.onPttUp() },
-                        onPttCancel = { viewModel.onPttCancel() }
-                    )
+            Spacer(modifier = Modifier.height(12.dp))
 
-                    Spacer(modifier = Modifier.height(16.dp))
+            // Shared ISRO Telemetry HUD
+            TelemetryCard(stats = stats)
 
-                    if (hasAudio && pttState == PttState.IDLE) {
-                        OutlinedButton(
-                            onClick = { viewModel.replayLastAudio() },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color(0xFF38BDF8)
-                            ),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(
-                                brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF334155))
-                            ),
-                            shape = RoundedCornerShape(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Replay Last Audio (${stats.recordedDurationMs / 1000f}s)",
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Tab Content
+            if (selectedTabIndex == 0) {
+                // --- TAB 1: PTT TRANSCEIVER (MILESTONE 1) ---
+                if (!hasRecordPermission) {
+                    PermissionCard(
+                        onRequestPermission = {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
-                    } else {
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
-                            text = "HOLD TO TALK • RELEASE TO PLAY",
-                            color = Color(0xFF64748B),
-                            fontSize = 11.sp,
+                            text = when (pttState) {
+                                PttState.RECORDING -> "LIVE MICROPHONE INPUT"
+                                PttState.PLAYING -> "AUDIO PLAYBACK IN PROGRESS"
+                                PttState.IDLE -> "AUDIO ENGINE READY"
+                            },
+                            color = when (pttState) {
+                                PttState.RECORDING -> Color(0xFFEF4444)
+                                PttState.PLAYING -> Color(0xFF10B981)
+                                PttState.IDLE -> Color(0xFF64748B)
+                            },
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp,
                             fontFamily = FontFamily.Monospace
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        AmplitudeVisualizer(
+                            amplitudeProvider = { amplitude },
+                            barColor = if (pttState == PttState.RECORDING) Color(0xFFEF4444) else Color(0xFF38BDF8),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .background(Color(0xFF0F172A), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        PttButton(
+                            pttState = pttState,
+                            amplitudeProvider = { amplitude },
+                            onPttDown = { viewModel.onPttDown() },
+                            onPttUp = { viewModel.onPttUp() },
+                            onPttCancel = { viewModel.onPttCancel() }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (hasAudio && pttState == PttState.IDLE) {
+                            OutlinedButton(
+                                onClick = { viewModel.replayLastAudio() },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFF38BDF8)
+                                ),
+                                border = ButtonDefaults.outlinedButtonBorder.copy(
+                                    brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF334155))
+                                ),
+                                shape = RoundedCornerShape(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Replay Mic Audio (${stats.recordedDurationMs / 1000f}s)",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "HOLD TO TALK • RELEASE TO TRANSMIT",
+                                color = Color(0xFF64748B),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
                     }
                 }
+            } else {
+                // --- TAB 2: INDIC TTS STATION (MILESTONE 2) ---
+                TtsControlCard(
+                    inputText = ttsInputText,
+                    selectedLanguage = selectedLanguage,
+                    isSynthesizing = isSynthesizing,
+                    isPlaying = isPlayingTts,
+                    onInputTextChanged = { viewModel.updateInputText(it) },
+                    onLanguageSelected = { viewModel.selectLanguage(it) },
+                    onEmergencyPresetSelected = { viewModel.selectEmergencyPreset(it) },
+                    onSynthesizeAndSpeak = { isEmergency -> viewModel.synthesizeAndSpeak(isEmergency) },
+                    onStopPlayback = { viewModel.stopTtsPlayback() }
+                )
             }
         }
     }
@@ -277,30 +345,30 @@ private fun PermissionCard(
             .fillMaxWidth()
             .background(Color(0xFF0F172A), RoundedCornerShape(12.dp))
             .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
-            .padding(24.dp),
+            .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
             imageVector = Icons.Default.Security,
             contentDescription = null,
             tint = Color(0xFF38BDF8),
-            modifier = Modifier.size(48.dp)
+            modifier = Modifier.size(40.dp)
         )
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Text(
             text = "Microphone Access Required",
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 15.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "iTantra operates 100% offline. Microphone access is required to capture 16 kHz PCM voice notes for Walkie-Talkie transmission. No audio ever leaves your device.",
             color = Color(0xFF94A3B8),
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             textAlign = TextAlign.Center
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
         Button(
             onClick = onRequestPermission,
             colors = ButtonDefaults.buttonColors(
@@ -309,9 +377,9 @@ private fun PermissionCard(
             ),
             shape = RoundedCornerShape(8.dp)
         ) {
-            Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(text = "Enable Microphone", fontWeight = FontWeight.Bold)
+            Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(text = "Enable Microphone", fontWeight = FontWeight.Bold, fontSize = 12.sp)
         }
     }
 }

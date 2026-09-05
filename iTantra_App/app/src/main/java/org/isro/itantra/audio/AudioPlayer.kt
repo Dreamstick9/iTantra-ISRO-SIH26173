@@ -12,10 +12,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.isro.itantra.tts.GeneratedAudio
+import org.isro.itantra.tts.TtsAudioAdapter
 
 /**
- * Low-latency 16 kHz Mono 16-bit PCM Audio Player using AudioTrack.
- * Features pre-buffering to prevent start pops and drain detection to prevent tail truncation.
+ * Low-latency Dynamic PCM Audio Player using AudioTrack.
+ * Features:
+ * - Dynamic sample rate switching (16 kHz mic playback, 22.05 kHz TTS voice synthesis)
+ * - Direct playback of GeneratedAudio from neural TTS
+ * - Pre-buffering to prevent start pops and drain detection to prevent tail truncation
+ * - AudioAttributes priority routing (USAGE_MEDIA vs USAGE_ALARM)
  */
 class AudioPlayer(
     private val onPlaybackStarted: (() -> Unit)? = null,
@@ -32,24 +38,44 @@ class AudioPlayer(
     var isPlaying: Boolean = false
         private set
 
+    /**
+     * Plays a GeneratedAudio instance directly from Milestone 2 TTS.
+     */
+    fun playGeneratedAudio(
+        scope: CoroutineScope,
+        audio: GeneratedAudio,
+        isAlarmPriority: Boolean = false
+    ): Boolean {
+        if (audio.samples.isEmpty()) return false
+        val pcmBytes = TtsAudioAdapter.floatsToPcm16(audio.samples)
+        return playPcm(
+            scope = scope,
+            pcmData = pcmBytes,
+            sampleRate = audio.sampleRate,
+            isAlarmPriority = isAlarmPriority
+        )
+    }
+
     fun playPcm(
         scope: CoroutineScope,
         pcmData: ByteArray,
+        sampleRate: Int = AudioConfig.SAMPLE_RATE,
         isAlarmPriority: Boolean = false
     ): Boolean {
         if (isPlaying || pcmData.isEmpty()) return false
 
         val minBufSize = AudioTrack.getMinBufferSize(
-            AudioConfig.SAMPLE_RATE,
+            sampleRate,
             AudioConfig.CHANNEL_OUT,
             AudioConfig.AUDIO_ENCODING
         )
         if (minBufSize <= 0) {
-            Log.e(TAG, "AudioTrack parameter error: minBufferSize = $minBufSize")
+            Log.e(TAG, "AudioTrack parameter error: minBufferSize = $minBufSize @ $sampleRate Hz")
             return false
         }
 
-        val internalBufferSize = maxOf(minBufSize * 2, AudioConfig.FRAME_SIZE_BYTES * 4)
+        val frameSizeBytes = ((sampleRate * AudioConfig.FRAME_DURATION_MS) / 1000) * AudioConfig.BYTES_PER_SAMPLE
+        val internalBufferSize = maxOf(minBufSize * 2, frameSizeBytes * 4)
 
         val attributes = AudioAttributes.Builder().apply {
             if (isAlarmPriority) {
@@ -64,7 +90,7 @@ class AudioPlayer(
 
         val format = AudioFormat.Builder()
             .setEncoding(AudioConfig.AUDIO_ENCODING)
-            .setSampleRate(AudioConfig.SAMPLE_RATE)
+            .setSampleRate(sampleRate)
             .setChannelMask(AudioConfig.CHANNEL_OUT)
             .build()
 
@@ -78,7 +104,13 @@ class AudioPlayer(
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
 
-        val track = builder.build()
+        val track = try {
+            builder.build()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to build AudioTrack", e)
+            return false
+        }
+
         if (track.state != AudioTrack.STATE_INITIALIZED) {
             Log.e(TAG, "Failed to initialize AudioTrack")
             track.release()
@@ -91,7 +123,7 @@ class AudioPlayer(
         playbackJob = scope.launch(Dispatchers.IO) {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             try {
-                val chunkSize = AudioConfig.FRAME_SIZE_BYTES
+                val chunkSize = frameSizeBytes
                 val totalBytes = pcmData.size
                 var offset = 0
                 var startedPlaying = false
@@ -121,7 +153,7 @@ class AudioPlayer(
                 if (startedPlaying && isPlaying) {
                     // Drain buffer so speech tail is not truncated
                     track.stop()
-                    val maxWaitMs = (totalFrames * 1000L / AudioConfig.SAMPLE_RATE) + 500L
+                    val maxWaitMs = (totalFrames * 1000L / sampleRate) + 500L
                     val drainStart = System.currentTimeMillis()
                     while (isActive && isPlaying && track.playbackHeadPosition < totalFrames && (System.currentTimeMillis() - drainStart < maxWaitMs)) {
                         kotlinx.coroutines.delay(10)
