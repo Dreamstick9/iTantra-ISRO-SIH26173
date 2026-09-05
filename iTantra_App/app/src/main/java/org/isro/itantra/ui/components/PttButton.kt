@@ -178,14 +178,15 @@ fun PttButton(
                         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         currentOnPttDown()
 
-                        val up = waitForUpOrCancellation()
-                        if (up != null) {
-                            up.consume()
-                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                            currentOnPttUp()
-                        } else {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            currentOnPttCancel()
+                        var isDown = true
+                        while (isDown) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.all { !it.pressed }) {
+                                isDown = false
+                                event.changes.forEach { it.consume() }
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                currentOnPttUp()
+                            }
                         }
                     }
                 }

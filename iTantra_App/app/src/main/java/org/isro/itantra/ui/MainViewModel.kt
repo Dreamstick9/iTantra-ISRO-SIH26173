@@ -82,6 +82,14 @@ class MainViewModel : ViewModel() {
     // MILESTONE 1: Push-To-Talk Audio Actions
     // -------------------------------------------------------------
 
+    fun toggleRecording() {
+        when (_pttState.value) {
+            PttState.IDLE -> onPttDown()
+            PttState.RECORDING -> onPttUp()
+            PttState.PLAYING -> audioPlayer.stop()
+        }
+    }
+
     fun onPttDown() {
         if (_pttState.value != PttState.IDLE) return
 

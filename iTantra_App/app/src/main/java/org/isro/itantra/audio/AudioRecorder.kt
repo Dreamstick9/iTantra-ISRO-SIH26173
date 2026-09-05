@@ -60,7 +60,7 @@ class AudioRecorder(
             .build()
 
         val record = AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+            .setAudioSource(MediaRecorder.AudioSource.MIC)
             .setAudioFormat(audioFormat)
             .setBufferSizeInBytes(internalBufferSize)
             .build()
@@ -79,10 +79,11 @@ class AudioRecorder(
             Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
             try {
                 record.startRecording()
-                Log.d(TAG, "AudioRecord started recording")
+                Log.d(TAG, "AudioRecord started recording with source=MIC, sampleRate=${AudioConfig.SAMPLE_RATE}")
 
                 val buffer = ByteArray(AudioConfig.FRAME_SIZE_BYTES)
                 var isFirstFrame = true
+                var chunkCount = 0
 
                 while (isActive && isRecording) {
                     val bytesRead = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
@@ -101,7 +102,18 @@ class AudioRecorder(
                         val level = AudioUtils.calculateVisualizerLevel(rms)
                         onAmplitudeChanged?.invoke(level)
 
-                        // Emit chunk to optional subscriber (e.g. streaming neural STT)
+                        var peak = 0
+                        for (i in 0 until bytesRead step 2) {
+                            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort().toInt()
+                            val absS = kotlin.math.abs(sample)
+                            if (absS > peak) peak = absS
+                        }
+
+                        if (chunkCount++ % 10 == 0 || peak > 100) {
+                            Log.d(TAG, "PCM chunk #$chunkCount: bytesRead=$bytesRead, peak=$peak, rms=$rms, level=$level")
+                        }
+
+                        // Emit chunk to optional subscriber
                         onAudioChunk?.invoke(buffer.copyOf(bytesRead), bytesRead)
                     } else if (bytesRead < 0) {
                         Log.e(TAG, "AudioRecord.read error: $bytesRead")
