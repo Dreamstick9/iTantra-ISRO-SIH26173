@@ -9,14 +9,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MockAudioEngine : AudioEngine {
     private val TAG = "MockAudio"
 
+    private val _recordingState = MutableStateFlow(AudioRecordingState.IDLE)
+    override val recordingState: StateFlow<AudioRecordingState> = _recordingState.asStateFlow()
+
     private val _audioLevel = MutableStateFlow(0f)
     override val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
 
     private val _isRecording = AtomicBoolean(false)
-    override val isRecording: Boolean get() = _isRecording.get()
+    val isRecording: Boolean get() = _isRecording.get()
 
     private val _isPlaying = AtomicBoolean(false)
-    override val isPlaying: Boolean get() = _isPlaying.get()
+    val isPlaying: Boolean get() = _isPlaying.get()
 
     var lastPlayedAudio: ByteArray? = null
         private set
@@ -25,35 +28,37 @@ class MockAudioEngine : AudioEngine {
     var recordingStartTimestamp: Long = 0L
         private set
 
-    override fun initialize(): Result<Unit> {
+    fun initialize(): Result<Unit> {
         Logger.i(TAG, "Initialized MockAudioEngine (16kHz Mono 16-bit PCM).")
         return Result.success(Unit)
     }
 
-    override fun startRecording(): Result<Unit> {
+    override suspend fun startRecording() {
         if (_isRecording.compareAndSet(false, true)) {
             recordingStartTimestamp = System.currentTimeMillis()
+            _recordingState.value = AudioRecordingState.RECORDING
             _audioLevel.value = 0.72f
             Logger.d(TAG, "Audio capture started.")
-            return Result.success(Unit)
         }
-        return Result.success(Unit)
     }
 
-    override fun stopRecording(): ByteArray {
+    override suspend fun stopRecording(): ByteArray {
         return if (_isRecording.compareAndSet(true, false)) {
+            _recordingState.value = AudioRecordingState.PROCESSING
             _audioLevel.value = 0f
             val durationMs = (System.currentTimeMillis() - recordingStartTimestamp).coerceAtLeast(100L)
             val sampleCount = ((durationMs * AudioConfig.SAMPLE_RATE_HZ) / 1000L).toInt()
             val pcmBytes = ByteArray(sampleCount * AudioConfig.BYTES_PER_SAMPLE) { (it % 127).toByte() }
             Logger.d(TAG, "Audio capture stopped. Captured ${pcmBytes.size} bytes ($durationMs ms).")
+            _recordingState.value = AudioRecordingState.IDLE
             pcmBytes
         } else {
+            _recordingState.value = AudioRecordingState.IDLE
             ByteArray(0)
         }
     }
 
-    override fun playAudio(pcmData: ByteArray, sampleRate: Int, isEmergency: Boolean): Result<Unit> {
+    fun playAudio(pcmData: ByteArray, sampleRate: Int = AudioConfig.SAMPLE_RATE_HZ, isEmergency: Boolean = false): Result<Unit> {
         lastPlayedAudio = pcmData
         lastPlayedWasEmergency = isEmergency
         _isPlaying.set(true)
@@ -65,15 +70,17 @@ class MockAudioEngine : AudioEngine {
         return Result.success(Unit)
     }
 
-    override fun stopPlayback() {
+    fun stopPlayback() {
         if (_isPlaying.compareAndSet(true, false)) {
             Logger.d(TAG, "Audio playback stopped.")
         }
     }
 
     override fun release() {
-        stopRecording()
+        _isRecording.set(false)
         stopPlayback()
+        _recordingState.value = AudioRecordingState.IDLE
+        _audioLevel.value = 0f
         Logger.i(TAG, "MockAudioEngine released.")
     }
 

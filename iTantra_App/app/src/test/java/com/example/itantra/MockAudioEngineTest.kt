@@ -16,7 +16,7 @@ class MockAudioEngineTest {
     }
 
     @Test
-    fun testRecordingLifecycle() {
+    fun testRecordingLifecycle() = kotlinx.coroutines.runBlocking {
         assertFalse(engine.isRecording)
         assertEquals(0f, engine.audioLevel.value, 0.001f)
 

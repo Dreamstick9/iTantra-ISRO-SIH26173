@@ -39,9 +39,9 @@ class MainViewModel(
     val appState: StateFlow<AppState> = _appState.asStateFlow()
 
     init {
-        Logger.i(TAG, "MainViewModel initialized with Stage 0 decoupled architecture.")
+        Logger.i(TAG, "MainViewModel initialized with Stage 1 decoupled architecture.")
 
-        audioEngine.initialize()
+        (audioEngine as? MockAudioEngine)?.initialize()
         speechEngine.initialize()
         transportEngine.initialize()
 
@@ -49,6 +49,34 @@ class MainViewModel(
         viewModelScope.launch(ioDispatcher) {
             audioEngine.audioLevel.collect { level ->
                 _appState.update { it.copy(audioLevel = level) }
+            }
+        }
+
+        // Observe audio engine recording state
+        viewModelScope.launch(ioDispatcher) {
+            audioEngine.recordingState.collect { recState ->
+                when (recState) {
+                    com.example.itantra.audio.AudioRecordingState.RECORDING -> {
+                        _appState.update { it.copy(pttState = PttState.RECORDING) }
+                    }
+                    com.example.itantra.audio.AudioRecordingState.PROCESSING -> {
+                        _appState.update { it.copy(pttState = PttState.PROCESSING) }
+                    }
+                    com.example.itantra.audio.AudioRecordingState.IDLE -> {
+                        if (_appState.value.pttState != PttState.IDLE) {
+                            _appState.update { it.copy(pttState = PttState.IDLE) }
+                        }
+                    }
+                    com.example.itantra.audio.AudioRecordingState.ERROR -> {
+                        _appState.update {
+                            it.copy(
+                                pttState = PttState.IDLE,
+                                isPttPressed = false,
+                                isPttLocked = false
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -78,27 +106,53 @@ class MainViewModel(
     // USER ACTIONS
     // ========================================================================
 
+    fun onPermissionResult(isGranted: Boolean) {
+        _appState.update {
+            it.copy(
+                hasAudioPermission = isGranted,
+                errorMessage = if (isGranted) null else "Microphone permission (RECORD_AUDIO) was denied. Please grant permission to record audio."
+            )
+        }
+    }
+
     fun onPttPressed() {
         if (_appState.value.pttState != PttState.IDLE) return
 
-        if (!_appState.value.emergencyAlert.isActive && audioEngine.isPlaying) {
-            audioEngine.stopPlayback()
-            _appState.update { it.copy(isAudioPlaying = false) }
+        _appState.update {
+            it.copy(
+                pttState = PttState.RECORDING,
+                isPttPressed = true,
+                statusMessage = "Recording PCM audio...",
+                errorMessage = null
+            )
         }
 
-        val result = audioEngine.startRecording()
-        if (result.isSuccess) {
-            _appState.update {
-                it.copy(
-                    pttState = PttState.RECORDING,
-                    isPttPressed = true,
-                    statusMessage = "Recording audio...",
-                    errorMessage = null
-                )
-            }
-        } else {
-            _appState.update {
-                it.copy(errorMessage = "Failed to start recording")
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                audioEngine.startRecording()
+            } catch (e: SecurityException) {
+                Logger.e(TAG, "Microphone permission missing: ${e.message}")
+                _appState.update {
+                    it.copy(
+                        pttState = PttState.IDLE,
+                        isPttPressed = false,
+                        isPttLocked = false,
+                        hasAudioPermission = false,
+                        errorMessage = "RECORD_AUDIO permission denied. Please grant microphone access.",
+                        statusMessage = "Permission required"
+                    )
+                }
+            } catch (e: Exception) {
+                Logger.e(TAG, "AudioRecord initialization error: ${e.message}", e)
+                _appState.update {
+                    it.copy(
+                        pttState = PttState.IDLE,
+                        isPttPressed = false,
+                        isPttLocked = false,
+                        errorMessage = "AudioRecord initialization error: ${e.message}",
+                        statusMessage = "AudioRecord failed"
+                    )
+                }
             }
         }
     }
@@ -108,93 +162,58 @@ class MainViewModel(
 
         _appState.update {
             it.copy(
-                pttState = PttState.TRANSMITTING,
+                pttState = PttState.PROCESSING,
                 isPttPressed = false,
-                statusMessage = "Transcribing & Transmitting..."
+                isPttLocked = false,
+                statusMessage = "Processing captured audio..."
             )
         }
 
         viewModelScope.launch(ioDispatcher) {
-            val startTime = System.currentTimeMillis()
-            val pcmAudio = audioEngine.stopRecording()
+            try {
+                val pcmAudio = audioEngine.stopRecording()
 
-            if (pcmAudio.isEmpty()) {
+                if (pcmAudio.isEmpty()) {
+                    _appState.update {
+                        it.copy(
+                            pttState = PttState.IDLE,
+                            statusMessage = "Audio capture too short (0 bytes)",
+                            errorMessage = null
+                        )
+                    }
+                    return@launch
+                }
+
+                val durationMs = (pcmAudio.size * 1000L) / AudioConfig.BYTES_PER_SECOND
+                val debugInfo = AudioDebugInfo(
+                    durationMs = durationMs,
+                    byteCount = pcmAudio.size,
+                    message = "Audio captured successfully",
+                    sampleRate = AudioConfig.SAMPLE_RATE_HZ,
+                    channels = AudioConfig.CHANNEL_COUNT,
+                    bitDepth = AudioConfig.BITS_PER_SAMPLE,
+                    timestamp = System.currentTimeMillis()
+                )
+
+                Logger.i(TAG, "Audio captured successfully: ${pcmAudio.size} bytes ($durationMs ms).")
+
                 _appState.update {
                     it.copy(
                         pttState = PttState.IDLE,
-                        statusMessage = "Tap too short (no audio)",
+                        lastAudioDebugInfo = debugInfo,
+                        statusMessage = "Audio captured successfully (${pcmAudio.size} bytes, ${durationMs}ms)",
                         errorMessage = null
                     )
                 }
-                return@launch
-            }
-
-            val lang = _appState.value.inputLanguage
-            val sttResult = speechEngine.transcribe(pcmAudio, lang)
-
-            if (sttResult.isFailure) {
+            } catch (e: Exception) {
+                Logger.e(TAG, "Error stopping audio recording: ${e.message}", e)
                 _appState.update {
                     it.copy(
                         pttState = PttState.IDLE,
-                        errorMessage = sttResult.exceptionOrNull()?.message ?: "STT Failed",
-                        statusMessage = "STT Error"
+                        errorMessage = "AudioRecord stop error: ${e.message}",
+                        statusMessage = "Error stopping capture"
                     )
                 }
-                return@launch
-            }
-
-            val transcription = sttResult.getOrThrow()
-            val rawText = transcription.text.trim()
-            if (rawText.isBlank()) {
-                _appState.update {
-                    it.copy(
-                        pttState = PttState.IDLE,
-                        statusMessage = "Empty transcription",
-                        errorMessage = null
-                    )
-                }
-                return@launch
-            }
-
-            val isEmergency = _appState.value.emergencyAlert.isActive
-            val compressedBytes = compressionEngine.compressText(rawText)
-            val sttLatency = System.currentTimeMillis() - startTime
-
-            val outgoing = ReceivedMessage(
-                id = UUID.randomUUID().toString(),
-                senderId = "Local-Node",
-                senderName = "You",
-                text = rawText,
-                originalLanguage = lang,
-                targetLanguage = _appState.value.outputLanguage,
-                timestamp = System.currentTimeMillis(),
-                messageType = if (isEmergency) MessageType.EMERGENCY_ALERT else MessageType.VOICE_NOTE,
-                isEmergency = isEmergency,
-                rawUtf8ByteSize = rawText.toByteArray(Charsets.UTF_8).size,
-                compressedByteSize = compressedBytes.size,
-                isOutgoing = true,
-                latencyMetrics = LatencyMetrics(
-                    sttLatencyMs = sttLatency,
-                    transmissionLatencyMs = 38L,
-                    ttsLatencyMs = 0L,
-                    endToEndLatencyMs = sttLatency + 38L,
-                    characterCount = rawText.length,
-                    compressedByteSize = compressedBytes.size
-                )
-            )
-
-            val sendResult = transportEngine.sendMessage(outgoing)
-
-            _appState.update { state ->
-                val newMessages = listOf(outgoing) + state.messages
-                state.copy(
-                    pttState = PttState.IDLE,
-                    messages = newMessages,
-                    currentLiveTranscription = rawText,
-                    statusMessage = if (sendResult.isSuccess) "Transmitted (${compressedBytes.size} B)" else "Transmission error",
-                    errorMessage = sendResult.exceptionOrNull()?.message,
-                    lastLatencyMetrics = outgoing.latencyMetrics
-                )
             }
         }
     }
@@ -290,7 +309,7 @@ class MainViewModel(
                 isEmergency = message.isEmergency
             )
             synthResult.onSuccess { synth ->
-                audioEngine.playAudio(
+                (audioEngine as? MockAudioEngine)?.playAudio(
                     pcmData = synth.audioPcm,
                     sampleRate = synth.sampleRate,
                     isEmergency = message.isEmergency
@@ -354,7 +373,7 @@ class MainViewModel(
                 )
             }
 
-            audioEngine.playAudio(
+            (audioEngine as? MockAudioEngine)?.playAudio(
                 pcmData = synth.audioPcm,
                 sampleRate = synth.sampleRate,
                 isEmergency = message.isEmergency

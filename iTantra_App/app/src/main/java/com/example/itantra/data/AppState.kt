@@ -32,11 +32,11 @@ enum class TransportType(val displayName: String) {
 enum class PttState {
     IDLE,
     RECORDING,
-    TRANSMITTING;
+    PROCESSING;
 
     val isIdle: Boolean get() = this == IDLE
     val isRecording: Boolean get() = this == RECORDING
-    val isTransmitting: Boolean get() = this == TRANSMITTING
+    val isProcessing: Boolean get() = this == PROCESSING
     val isActive: Boolean get() = this != IDLE
 }
 
@@ -211,6 +211,16 @@ data class ReceivedMessage(
 // 8. ROOT APPLICATION DOMAIN STATE (AppState)
 // ============================================================================
 
+data class AudioDebugInfo(
+    val durationMs: Long,
+    val byteCount: Int,
+    val message: String = "Audio captured successfully",
+    val sampleRate: Int = 16000,
+    val channels: Int = 1,
+    val bitDepth: Int = 16,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 data class AppState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val transportType: TransportType = TransportType.NONE,
@@ -229,6 +239,8 @@ data class AppState(
     val isAudioPlaying: Boolean = false,
     val audioLevel: Float = 0f,
     val lastLatencyMetrics: LatencyMetrics? = null,
+    val lastAudioDebugInfo: AudioDebugInfo? = null,
+    val hasAudioPermission: Boolean = false,
     val statusMessage: String? = "Ready",
     val errorMessage: String? = null
 ) {

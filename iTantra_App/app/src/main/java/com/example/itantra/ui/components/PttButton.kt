@@ -61,13 +61,20 @@ fun PttButton(
         label = "PttRippleProgress"
     )
 
-    val activeColor = if (isEmergency) Color(0xFFFF1744) else Color(0xFF00E676)
+    val activeColor = when {
+        isEmergency -> Color(0xFFFF1744)
+        pttState == PttState.PROCESSING -> Color(0xFFFFB300)
+        else -> Color(0xFF00E676)
+    }
     val idleColor = MaterialTheme.colorScheme.primary
     val buttonColor by animateColorAsState(
         targetValue = if (isActive) activeColor else idleColor,
         animationSpec = tween(durationMillis = 200),
         label = "PttColor"
     )
+
+    val currentOnPressStart by rememberUpdatedState(onPressStart)
+    val currentOnPressEnd by rememberUpdatedState(onPressEnd)
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -131,11 +138,11 @@ fun PttButton(
                             awaitEachGesture {
                                 awaitFirstDown().also {
                                     isBeingPressed = true
-                                    onPressStart()
+                                    currentOnPressStart()
                                 }
                                 waitForUpOrCancellation()
                                 isBeingPressed = false
-                                onPressEnd()
+                                currentOnPressEnd()
                             }
                         }
                     },
@@ -159,14 +166,14 @@ fun PttButton(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = when {
-                                isLocked -> "LOCKED ON"
                                 pttState == PttState.RECORDING -> "RECORDING"
-                                pttState == PttState.TRANSMITTING -> "SENDING"
-                                else -> "HOLD TO TALK"
+                                pttState == PttState.PROCESSING -> "PROCESSING"
+                                isLocked -> "LOCKED"
+                                else -> "IDLE"
                             },
                             color = Color.Black,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             letterSpacing = 1.sp
                         )
                     }
@@ -200,9 +207,10 @@ fun PttButton(
         Text(
             text = when {
                 isEmergency && isActive -> "TRANSMITTING HIGH-PRIORITY EMERGENCY SPEECH"
+                pttState == PttState.RECORDING -> "Recording 16-bit Mono PCM audio (16kHz)..."
+                pttState == PttState.PROCESSING -> "Processing & finalizing PCM buffer..."
                 isLocked -> "Hands-Free Lock Active (Tap lock to release)"
-                isActive -> "Recording voice for on-device STT..."
-                else -> "Hold to speak or tap Lock badge for hands-free"
+                else -> "Hold to record audio or tap Lock badge for hands-free"
             },
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,

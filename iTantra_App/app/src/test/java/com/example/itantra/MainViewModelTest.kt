@@ -82,9 +82,10 @@ class MainViewModelTest {
         val finalState = viewModel.appState.value
         assertEquals(PttState.IDLE, finalState.pttState)
         assertFalse(audioEngine.isRecording)
-        assertEquals(1, finalState.messages.size)
-        assertTrue(finalState.messages[0].text.isNotEmpty())
-        assertNotNull(finalState.lastLatencyMetrics)
+        assertNotNull(finalState.lastAudioDebugInfo)
+        assertEquals("Audio captured successfully", finalState.lastAudioDebugInfo?.message)
+        assertTrue((finalState.lastAudioDebugInfo?.durationMs ?: 0L) > 0L)
+        assertTrue((finalState.lastAudioDebugInfo?.byteCount ?: 0) > 0)
     }
 
     @Test
