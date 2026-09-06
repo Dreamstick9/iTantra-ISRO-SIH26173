@@ -39,8 +39,16 @@ class AudioTrackPlayer(
     /**
      * Plays the given 16-bit linear PCM audio byte array on Dispatchers.IO.
      * Non-blocking from UI perspective, but suspends until playback finishes or is cancelled.
+     *
+     * @param pcmData Raw 16-bit linear PCM audio bytes.
+     * @param sampleRate Sampling rate in Hz (typically 16000 or 22050).
+     * @param customAudioAttributes Optional AudioAttributes to override the default USAGE_MEDIA.
      */
-    suspend fun play(pcmData: ByteArray, sampleRate: Int) = withContext(ioDispatcher) {
+    suspend fun play(
+        pcmData: ByteArray,
+        sampleRate: Int,
+        customAudioAttributes: AudioAttributes? = null
+    ) = withContext(ioDispatcher) {
         if (pcmData.isEmpty()) {
             Logger.d(TAG, "PCM data is empty, skipping playback.")
             _playbackState.value = TtsPlaybackState.IDLE
@@ -63,7 +71,7 @@ class AudioTrackPlayer(
                 val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
                 val bufferSize = maxOf(minBufferSize * 2, 8192)
 
-                val audioAttributes = AudioAttributes.Builder()
+                val audioAttributes = customAudioAttributes ?: AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
@@ -150,6 +158,23 @@ class AudioTrackPlayer(
                 currentPlayJob = null
             }
         }
+    }
+
+    /**
+     * Plays the given PCM audio specifically routed through Android's USAGE_ALARM stream.
+     * Enforces FLAG_AUDIBILITY_ENFORCED and maximum track gain.
+     */
+    suspend fun playAlarm(pcmData: ByteArray, sampleRate: Int) = withContext(ioDispatcher) {
+        val alarmAttributes = try {
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                .build()
+        } catch (t: Throwable) {
+            null
+        }
+        play(pcmData, sampleRate, alarmAttributes)
     }
 
     /**

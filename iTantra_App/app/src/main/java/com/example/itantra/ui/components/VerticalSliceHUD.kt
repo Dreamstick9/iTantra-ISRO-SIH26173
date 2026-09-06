@@ -2,6 +2,7 @@ package com.example.itantra.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -58,6 +59,8 @@ fun VerticalSliceHUD(
     compressionMetrics: com.example.itantra.data.CompressionMetrics? = null,
     continuousState: com.example.itantra.data.ContinuousModeState = com.example.itantra.data.ContinuousModeState.IDLE,
     transmissionMode: com.example.itantra.data.TransmissionMode = com.example.itantra.data.TransmissionMode.PUSH_TO_TALK,
+    isEmergencyAlert: Boolean = false,
+    alertPlaybackResult: com.example.itantra.alert.AlertPlaybackResult? = null,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -139,6 +142,12 @@ fun VerticalSliceHUD(
 
             // 4. Bandwidth & Unishox2 Compression Telemetry Section
             CompressionTelemetrySection(compressionMetrics = compressionMetrics)
+
+            // 5. Emergency Alarm Telemetry Section
+            EmergencyAlarmTelemetrySection(
+                isEmergencyActive = isEmergencyAlert,
+                alertResult = alertPlaybackResult
+            )
         }
     }
 }
@@ -1000,6 +1009,148 @@ private fun CompressionMetricCard(
                 fontSize = 7.sp,
                 color = MaterialTheme.colorScheme.outline,
                 textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ============================================================================
+// 5. EMERGENCY ALARM TELEMETRY SECTION
+// ============================================================================
+
+@Composable
+fun EmergencyAlarmTelemetrySection(
+    isEmergencyActive: Boolean,
+    alertResult: com.example.itantra.alert.AlertPlaybackResult?,
+    modifier: Modifier = Modifier
+) {
+    if (!isEmergencyActive && alertResult == null) return
+
+    val pulseAlpha = if (isEmergencyActive) {
+        val infiniteTransition = rememberInfiniteTransition(label = "alarmPulse")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue = 0.6f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(600, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseAlpha"
+        )
+        alpha
+    } else 1.0f
+
+    val borderColor = if (isEmergencyActive) {
+        Color(0xFFFF1744).copy(alpha = pulseAlpha)
+    } else {
+        Color(0xFFFF9100).copy(alpha = 0.5f)
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1E0A0E).copy(alpha = 0.85f),
+        border = BorderStroke(1.5.dp, borderColor)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Emergency Alert",
+                        tint = Color(0xFFFF1744),
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = "EMERGENCY ALARM TELEMETRY",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFFFF5252),
+                        fontSize = 10.sp,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = if (isEmergencyActive) Color(0xFFFF1744).copy(alpha = 0.25f) else Color(0xFFFF9100).copy(alpha = 0.2f),
+                    border = BorderStroke(1.dp, if (isEmergencyActive) Color(0xFFFF1744) else Color(0xFFFF9100))
+                ) {
+                    Text(
+                        text = if (isEmergencyActive) "LOUD ALARM PLAYBACK" else "ALARM DISPATCHED",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isEmergencyActive) Color(0xFFFF5252) else Color(0xFFFFAB40),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 8.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // Metric boxes
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // 1. ROUTING
+                CompressionMetricCard(
+                    title = "ROUTING",
+                    value = "ALARM",
+                    subtitle = "USAGE_ALARM",
+                    accentColor = Color(0xFFFF5252),
+                    modifier = Modifier.weight(1f)
+                )
+
+                // 2. AUDIO FOCUS
+                val focusText = if (alertResult?.focusGranted == true || isEmergencyActive) "GRANTED" else "DEFAULT"
+                CompressionMetricCard(
+                    title = "AUDIO FOCUS",
+                    value = focusText,
+                    subtitle = "EXCLUSIVE",
+                    accentColor = Color(0xFFFF9100),
+                    modifier = Modifier.weight(1f)
+                )
+
+                // 3. STREAM VOLUME
+                val appliedVol = alertResult?.appliedVolume ?: 15
+                val maxVol = alertResult?.maxPermittedVolume ?: 15
+                CompressionMetricCard(
+                    title = "STREAM VOL",
+                    value = if (alertResult != null && appliedVol >= 0) "$appliedVol/$maxVol" else "MAX",
+                    subtitle = "Max Permitted",
+                    accentColor = Color(0xFFFFD600),
+                    modifier = Modifier.weight(1f)
+                )
+
+                // 4. QUEUE LOCK
+                CompressionMetricCard(
+                    title = "QUEUE LOCK",
+                    value = if (isEmergencyActive) "LOCKED" else "FREE",
+                    subtitle = if (isEmergencyActive) "Blocking Voice" else "Channel Open",
+                    accentColor = if (isEmergencyActive) Color(0xFFFF1744) else Color(0xFF00E676),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Text(
+                text = "STREAM_ALARM volume elevated to maximum permitted by Android policy. Channel locked until alarm broadcast drains.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFFF8A80).copy(alpha = 0.8f),
+                fontSize = 7.5.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }

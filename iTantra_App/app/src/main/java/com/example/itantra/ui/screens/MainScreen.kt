@@ -160,7 +160,9 @@ fun MainScreen(
                 metrics = state.lastLatencyMetrics,
                 compressionMetrics = state.lastCompressionMetrics,
                 continuousState = state.continuousModeState,
-                transmissionMode = state.transmissionMode
+                transmissionMode = state.transmissionMode,
+                isEmergencyAlert = state.isEmergencyPlaybackActive || state.emergencyAlert.isActive,
+                alertPlaybackResult = state.lastAlertPlaybackResult
             )
 
             // 2. Multilingual Configuration (10 SIH Mandated Languages)

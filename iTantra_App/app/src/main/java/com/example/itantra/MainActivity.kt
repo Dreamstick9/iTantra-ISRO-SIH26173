@@ -24,12 +24,16 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val audioTrackPlayer = com.example.itantra.audio.AudioTrackPlayer()
+                val alertManager = com.example.itantra.alert.AndroidAlertManager(applicationContext, audioTrackPlayer)
                 return MainViewModel(
                     audioEngine = AndroidAudioEngine(applicationContext),
                     speechEngine = SherpaOnnxSpeechEngine(applicationContext),
                     ttsEngine = SherpaOnnxTtsEngine(applicationContext),
                     transportEngine = WifiDirectTransportEngine(applicationContext),
                     compressionEngine = com.example.itantra.compression.Unishox2CompressionEngine(),
+                    audioTrackPlayer = audioTrackPlayer,
+                    alertManager = alertManager,
                     vadEngine = com.example.itantra.vad.SherpaSileroVadEngine(applicationContext)
                 ) as T
             }

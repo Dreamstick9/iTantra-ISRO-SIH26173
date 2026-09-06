@@ -1,5 +1,6 @@
 package com.example.itantra.data
 
+import com.example.itantra.alert.AlertPlaybackResult
 import java.util.UUID
 
 // ============================================================================
@@ -415,6 +416,8 @@ data class AppState(
     val lastLatencyMetrics: LatencyMetrics? = null,
     val lastCompressionMetrics: CompressionMetrics? = null,
     val lastAudioDebugInfo: AudioDebugInfo? = null,
+    val isEmergencyPlaybackActive: Boolean = false,
+    val lastAlertPlaybackResult: AlertPlaybackResult? = null,
     val hasAudioPermission: Boolean = false,
     val statusMessage: String? = "Ready",
     val errorMessage: String? = null

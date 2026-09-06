@@ -2,6 +2,8 @@ package com.example.itantra.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.itantra.alert.AlertManager
+import com.example.itantra.alert.MockAlertManager
 import com.example.itantra.audio.AudioConfig
 import com.example.itantra.audio.AudioEngine
 import com.example.itantra.audio.AudioTrackPlayer
@@ -45,6 +47,7 @@ class MainViewModel(
     val compressionEngine: CompressionEngine = Unishox2CompressionEngine(),
     val serviceController: ServiceController = MockServiceController(),
     val audioTrackPlayer: AudioTrackPlayer = AudioTrackPlayer(ioDispatcher),
+    val alertManager: AlertManager = MockAlertManager(audioTrackPlayer),
     val vadEngine: com.example.itantra.vad.VadEngine = com.example.itantra.vad.MockVadEngine()
 ) : ViewModel() {
 
@@ -223,6 +226,12 @@ class MainViewModel(
     }
 
     fun onPttPressed() {
+        if (alertManager.isAlertInProgress()) {
+            _appState.update {
+                it.copy(statusMessage = "Channel locked: Priority emergency broadcast in progress")
+            }
+            return
+        }
         if (_appState.value.transceiverState != TransceiverState.IDLE) return
 
         _appState.update {
@@ -1052,122 +1061,264 @@ class MainViewModel(
     }
 
     suspend fun handleIncomingMessage(message: TransportMessage) {
-        val t3 = System.currentTimeMillis()
-
-        _appState.update {
-            it.copy(
-                transceiverState = TransceiverState.RECEIVING,
-                pttState = PttState.PROCESSING,
-                statusMessage = "Receiving message from peer..."
-            )
-        }
-
-        val text = message.text
-        val netLat = if (message.t2 > 0 && t3 >= message.t2 && (t3 - message.t2) < 30000L) (t3 - message.t2) else 15L
-
-        _appState.update {
-            it.copy(
-                transceiverState = TransceiverState.SPEAKING,
-                pttState = PttState.PROCESSING,
-                isAudioPlaying = true,
-                statusMessage = "Synthesizing voice from peer..."
-            )
-        }
-
-        val audioData = try {
-            ttsEngine.synthesize(text)
-        } catch (e: Exception) {
-            Logger.e(TAG, "TTS synthesis error: ${e.message}", e)
-            AudioData.EMPTY
-        }
-
-        val t4 = System.currentTimeMillis()
-        val ttsLatency = t4 - t3
-
-        if (!audioData.isEmpty) {
-            val t5 = System.currentTimeMillis()
-            val e2eLatency = message.sttLatencyMs + netLat + ttsLatency + (t5 - t4)
-
-            val vsTimestamps = VerticalSliceTimestamps(
-                t0PttReleased = message.t0,
-                t1SttComplete = message.t1,
-                t2Transmitted = message.t2,
-                t3Received = t3,
-                t4TtsComplete = t4,
-                t5PlaybackStarted = t5,
-                sttLatencyMs = message.sttLatencyMs,
-                networkLatencyMs = netLat,
-                ttsLatencyMs = ttsLatency,
-                endToEndLatencyMs = e2eLatency
-            )
-
-            val latencyMetrics = vsTimestamps.toLatencyMetrics(
-                audioDurationMs = audioData.durationMs,
-                characterCount = text.length,
-                compressedByteSize = message.compressedPayload.size
-            ).copy(
-                realTimeFactor = if (audioData.durationMs > 0) ttsLatency.toDouble() / audioData.durationMs.toDouble() else 0.0
-            )
-
-            val compMetrics = CompressionMetrics.from(text, compressionEngine)
-
-            val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
-                playbackStatus = MessagePlaybackStatus.PLAYING,
-                latencyMetrics = latencyMetrics,
-                rawUtf8ByteSize = text.toByteArray(Charsets.UTF_8).size,
-                compressedByteSize = message.compressedPayload.size
-            )
-
-            _appState.update { state ->
-                val newMessages = listOf(receivedMsg) + state.messages
-                state.copy(
-                    messages = newMessages,
-                    isAudioPlaying = true,
-                    statusMessage = "Playing voice from ${receivedMsg.senderName} | Unishox2: ${compMetrics.originalBytes}B -> ${compMetrics.compressedBytes}B (${"%.1f".format(compMetrics.savedPercentage)}% saved)",
-                    verticalSliceTimestamps = vsTimestamps,
-                    lastLatencyMetrics = latencyMetrics,
-                    lastCompressionMetrics = compMetrics
-                )
-            }
-
-            try {
-                audioTrackPlayer.play(audioData.rawPcm, audioData.sampleRate)
-            } catch (e: Throwable) {
-                Logger.w(TAG, "AudioTrackPlayer playback error: ${e.message}, falling back to ttsEngine.speak", e)
-                ttsEngine.speak(text)
-            }
-
-            _appState.update { state ->
-                val updatedMessages = state.messages.map { msg ->
-                    if (msg.id == receivedMsg.id) msg.copy(playbackStatus = MessagePlaybackStatus.PLAYED) else msg
-                }
-                state.copy(
-                    messages = updatedMessages,
-                    isAudioPlaying = false,
-                    statusMessage = "Playback completed"
-                )
-            }
+        if (alertManager.isAlert(message)) {
+            handleIncomingAlertMessage(message)
         } else {
-            val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
-                playbackStatus = MessagePlaybackStatus.FAILED
-            )
-            _appState.update { state ->
-                val newMessages = listOf(receivedMsg) + state.messages
-                state.copy(
-                    messages = newMessages,
-                    isAudioPlaying = false,
-                    statusMessage = "TTS synthesis failed",
-                    errorMessage = "TTS synthesis failed"
-                )
-            }
+            handleIncomingNormalMessage(message)
+        }
+    }
+
+    private suspend fun handleIncomingAlertMessage(message: TransportMessage) {
+        // 1. Immediately interrupt any ongoing normal audio playback
+        try {
+            audioTrackPlayer.stop()
+            ttsEngine.stop()
+        } catch (e: Exception) {
+            Logger.w(TAG, "Error interrupting normal audio for incoming alert: ${e.message}")
         }
 
-        _appState.update {
-            it.copy(
-                transceiverState = TransceiverState.IDLE,
-                pttState = PttState.IDLE,
-                isAudioPlaying = false
-            )
+        // 2. Lock transceiver queue exclusively for alert
+        alertManager.withAlertLock {
+            val t3 = System.currentTimeMillis()
+            val netLat = if (message.t2 > 0 && t3 >= message.t2 && (t3 - message.t2) < 30000L) (t3 - message.t2) else 15L
+
+            _appState.update {
+                it.copy(
+                    transceiverState = TransceiverState.RECEIVING,
+                    pttState = PttState.PROCESSING,
+                    isEmergencyPlaybackActive = true,
+                    emergencyAlert = it.emergencyAlert.copy(
+                        isActive = true,
+                        title = "CRITICAL EMERGENCY BROADCAST",
+                        message = message.text,
+                        timestamp = t3
+                    ),
+                    statusMessage = "RECEIVING HIGH-PRIORITY ALERT BROADCAST..."
+                )
+            }
+
+            val text = message.text
+            _appState.update {
+                it.copy(
+                    transceiverState = TransceiverState.SPEAKING,
+                    isAudioPlaying = true,
+                    statusMessage = "SYNTHESIZING EMERGENCY ALARM AUDIO..."
+                )
+            }
+
+            val audioData = try {
+                ttsEngine.synthesize(text)
+            } catch (e: Exception) {
+                Logger.e(TAG, "Emergency TTS synthesis error: ${e.message}", e)
+                AudioData.EMPTY
+            }
+
+            val t4 = System.currentTimeMillis()
+            val ttsLatency = t4 - t3
+
+            if (!audioData.isEmpty) {
+                val t5 = System.currentTimeMillis()
+                val e2eLatency = message.sttLatencyMs + netLat + ttsLatency + (t5 - t4)
+
+                val vsTimestamps = VerticalSliceTimestamps(
+                    t0PttReleased = message.t0,
+                    t1SttComplete = message.t1,
+                    t2Transmitted = message.t2,
+                    t3Received = t3,
+                    t4TtsComplete = t4,
+                    t5PlaybackStarted = t5,
+                    sttLatencyMs = message.sttLatencyMs,
+                    networkLatencyMs = netLat,
+                    ttsLatencyMs = ttsLatency,
+                    endToEndLatencyMs = e2eLatency
+                )
+
+                val compMetrics = CompressionMetrics.from(text, compressionEngine)
+                val latencyMetrics = vsTimestamps.toLatencyMetrics(
+                    audioDurationMs = audioData.durationMs,
+                    characterCount = text.length,
+                    compressedByteSize = message.compressedPayload.size
+                ).copy(
+                    realTimeFactor = if (audioData.durationMs > 0) ttsLatency.toDouble() / audioData.durationMs.toDouble() else 0.0
+                )
+
+                val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
+                    playbackStatus = MessagePlaybackStatus.PLAYING,
+                    latencyMetrics = latencyMetrics,
+                    rawUtf8ByteSize = text.toByteArray(Charsets.UTF_8).size,
+                    compressedByteSize = message.compressedPayload.size,
+                    isEmergency = true
+                )
+
+                _appState.update { state ->
+                    state.copy(
+                        messages = listOf(receivedMsg) + state.messages,
+                        isAudioPlaying = true,
+                        isEmergencyPlaybackActive = true,
+                        statusMessage = "LOUD ALARM-CLASS PLAYBACK: \"${text.take(30)}\"",
+                        verticalSliceTimestamps = vsTimestamps,
+                        lastLatencyMetrics = latencyMetrics,
+                        lastCompressionMetrics = compMetrics
+                    )
+                }
+
+                // 3. Play loud alarm-class audio via AlertManager
+                val alertResult = alertManager.playEmergencyAlert(text, audioData)
+
+                _appState.update { state ->
+                    val updatedMessages = state.messages.map { msg ->
+                        if (msg.id == receivedMsg.id) msg.copy(playbackStatus = MessagePlaybackStatus.PLAYED) else msg
+                    }
+                    state.copy(
+                        messages = updatedMessages,
+                        isAudioPlaying = false,
+                        isEmergencyPlaybackActive = false,
+                        lastAlertPlaybackResult = alertResult,
+                        statusMessage = "Alert Broadcast finished [Vol: ${alertResult.appliedVolume}/${alertResult.maxPermittedVolume} | Focus: ${if (alertResult.focusGranted) "GRANTED" else "DEFAULT"}]",
+                        transceiverState = TransceiverState.IDLE,
+                        pttState = PttState.IDLE
+                    )
+                }
+            } else {
+                val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
+                    playbackStatus = MessagePlaybackStatus.FAILED,
+                    isEmergency = true
+                )
+                _appState.update { state ->
+                    state.copy(
+                        messages = listOf(receivedMsg) + state.messages,
+                        isAudioPlaying = false,
+                        isEmergencyPlaybackActive = false,
+                        statusMessage = "Emergency TTS synthesis failed",
+                        errorMessage = "Emergency TTS synthesis failed",
+                        transceiverState = TransceiverState.IDLE,
+                        pttState = PttState.IDLE
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun handleIncomingNormalMessage(message: TransportMessage) {
+        // Normal messages wait if an alert is currently in progress
+        alertManager.withAlertLock {
+            val t3 = System.currentTimeMillis()
+
+            _appState.update {
+                it.copy(
+                    transceiverState = TransceiverState.RECEIVING,
+                    pttState = PttState.PROCESSING,
+                    statusMessage = "Receiving message from peer..."
+                )
+            }
+
+            val text = message.text
+            val netLat = if (message.t2 > 0 && t3 >= message.t2 && (t3 - message.t2) < 30000L) (t3 - message.t2) else 15L
+
+            _appState.update {
+                it.copy(
+                    transceiverState = TransceiverState.SPEAKING,
+                    pttState = PttState.PROCESSING,
+                    isAudioPlaying = true,
+                    statusMessage = "Synthesizing voice from peer..."
+                )
+            }
+
+            val audioData = try {
+                ttsEngine.synthesize(text)
+            } catch (e: Exception) {
+                Logger.e(TAG, "TTS synthesis error: ${e.message}", e)
+                AudioData.EMPTY
+            }
+
+            val t4 = System.currentTimeMillis()
+            val ttsLatency = t4 - t3
+
+            if (!audioData.isEmpty) {
+                val t5 = System.currentTimeMillis()
+                val e2eLatency = message.sttLatencyMs + netLat + ttsLatency + (t5 - t4)
+
+                val vsTimestamps = VerticalSliceTimestamps(
+                    t0PttReleased = message.t0,
+                    t1SttComplete = message.t1,
+                    t2Transmitted = message.t2,
+                    t3Received = t3,
+                    t4TtsComplete = t4,
+                    t5PlaybackStarted = t5,
+                    sttLatencyMs = message.sttLatencyMs,
+                    networkLatencyMs = netLat,
+                    ttsLatencyMs = ttsLatency,
+                    endToEndLatencyMs = e2eLatency
+                )
+
+                val compMetrics = CompressionMetrics.from(text, compressionEngine)
+
+                val latencyMetrics = vsTimestamps.toLatencyMetrics(
+                    audioDurationMs = audioData.durationMs,
+                    characterCount = text.length,
+                    compressedByteSize = message.compressedPayload.size
+                ).copy(
+                    realTimeFactor = if (audioData.durationMs > 0) ttsLatency.toDouble() / audioData.durationMs.toDouble() else 0.0
+                )
+
+                val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
+                    playbackStatus = MessagePlaybackStatus.PLAYING,
+                    latencyMetrics = latencyMetrics,
+                    rawUtf8ByteSize = text.toByteArray(Charsets.UTF_8).size,
+                    compressedByteSize = message.compressedPayload.size
+                )
+
+                _appState.update { state ->
+                    val newMessages = listOf(receivedMsg) + state.messages
+                    state.copy(
+                        messages = newMessages,
+                        isAudioPlaying = true,
+                        statusMessage = "Playing voice from ${receivedMsg.senderName} | Unishox2: ${compMetrics.originalBytes}B -> ${compMetrics.compressedBytes}B (${"%.1f".format(compMetrics.savedPercentage)}% saved)",
+                        verticalSliceTimestamps = vsTimestamps,
+                        lastLatencyMetrics = latencyMetrics,
+                        lastCompressionMetrics = compMetrics
+                    )
+                }
+
+                try {
+                    audioTrackPlayer.play(audioData.rawPcm, audioData.sampleRate)
+                } catch (e: Throwable) {
+                    Logger.w(TAG, "AudioTrackPlayer playback error: ${e.message}, falling back to ttsEngine.speak", e)
+                    ttsEngine.speak(text)
+                }
+
+                _appState.update { state ->
+                    val updatedMessages = state.messages.map { msg ->
+                        if (msg.id == receivedMsg.id) msg.copy(playbackStatus = MessagePlaybackStatus.PLAYED) else msg
+                    }
+                    state.copy(
+                        messages = updatedMessages,
+                        isAudioPlaying = false,
+                        statusMessage = "Playback completed"
+                    )
+                }
+            } else {
+                val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
+                    playbackStatus = MessagePlaybackStatus.FAILED
+                )
+                _appState.update { state ->
+                    val newMessages = listOf(receivedMsg) + state.messages
+                    state.copy(
+                        messages = newMessages,
+                        isAudioPlaying = false,
+                        statusMessage = "TTS synthesis failed",
+                        errorMessage = "TTS synthesis failed"
+                    )
+                }
+            }
+
+            _appState.update {
+                it.copy(
+                    transceiverState = TransceiverState.IDLE,
+                    pttState = PttState.IDLE,
+                    isAudioPlaying = false
+                )
+            }
         }
     }
 
