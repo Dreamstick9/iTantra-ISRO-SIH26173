@@ -153,11 +153,12 @@ fun MainScreen(
                 }
             }
 
-            // 1. Vertical Slice HUD (Active Status Banner + Latencies + Timestamps)
+            // 1. Vertical Slice HUD (Active Status Banner + Latencies + Timestamps + Compression)
             VerticalSliceHUD(
                 transceiverState = state.transceiverState,
                 timestamps = state.verticalSliceTimestamps,
                 metrics = state.lastLatencyMetrics,
+                compressionMetrics = state.lastCompressionMetrics,
                 continuousState = state.continuousModeState,
                 transmissionMode = state.transmissionMode
             )

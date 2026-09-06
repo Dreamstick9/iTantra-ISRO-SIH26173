@@ -1,5 +1,6 @@
 package com.example.itantra.transport
 
+import com.example.itantra.compression.Unishox2
 import com.example.itantra.data.Language
 import com.example.itantra.data.LatencyMetrics
 import com.example.itantra.data.MessageType
@@ -66,6 +67,23 @@ data class MessagePayload(
 
     fun toEnvelopeByteArray(): ByteArray = toJson().toByteArray(Charsets.UTF_8)
 
+    fun toCompressedByteArray(forceEnvelope: Boolean = false): ByteArray {
+        val raw = toByteArray(forceEnvelope)
+        return try {
+            val compressed = Unishox2.compress(raw)
+            if (compressed.isNotEmpty() && compressed.size < raw.size) {
+                ByteArray(compressed.size + 1).apply {
+                    this[0] = 0x55.toByte()
+                    System.arraycopy(compressed, 0, this, 1, compressed.size)
+                }
+            } else {
+                raw
+            }
+        } catch (_: Exception) {
+            raw
+        }
+    }
+
     companion object {
         fun create(
             text: String,
@@ -85,7 +103,16 @@ data class MessagePayload(
 
         fun parse(payloadBytes: ByteArray): MessagePayload {
             if (payloadBytes.isEmpty()) return MessagePayload(text = "")
-            val raw = String(payloadBytes, Charsets.UTF_8)
+            val decompressedBytes = if (payloadBytes.isNotEmpty() && payloadBytes[0] == 0x55.toByte()) {
+                try {
+                    Unishox2.decompress(payloadBytes.copyOfRange(1, payloadBytes.size))
+                } catch (_: Exception) {
+                    payloadBytes
+                }
+            } else {
+                payloadBytes
+            }
+            val raw = String(decompressedBytes, Charsets.UTF_8)
             return parse(raw)
         }
 
@@ -357,7 +384,7 @@ data class TransportMessage(
             t1 = t1,
             t2 = t2
         )
-        return copy(compressedPayload = newPayload.toByteArray())
+        return copy(compressedPayload = newPayload.toCompressedByteArray())
     }
 
     /**
@@ -452,7 +479,7 @@ data class TransportMessage(
                 messageType = TransportMessageType.TEXT,
                 language = language,
                 priority = priority,
-                compressedPayload = payload.toByteArray()
+                compressedPayload = payload.toCompressedByteArray()
             )
         }
 
@@ -482,7 +509,7 @@ data class TransportMessage(
                 messageType = TransportMessageType.ALERT,
                 language = language,
                 priority = priority,
-                compressedPayload = payload.toByteArray()
+                compressedPayload = payload.toCompressedByteArray()
             )
         }
 
@@ -500,7 +527,7 @@ data class TransportMessage(
                 messageType = messageType,
                 language = language,
                 priority = priority,
-                compressedPayload = payload.toByteArray()
+                compressedPayload = payload.toCompressedByteArray()
             )
         }
 
@@ -527,7 +554,7 @@ data class TransportMessage(
                 messageType = type,
                 language = received.originalLanguage.isoCode,
                 priority = if (received.isEmergency) 1 else 0,
-                compressedPayload = payload.toByteArray()
+                compressedPayload = payload.toCompressedByteArray()
             )
         }
     }

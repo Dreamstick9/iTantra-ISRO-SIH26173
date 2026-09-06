@@ -235,6 +235,54 @@ data class LatencyMetrics(
     )
 }
 
+data class CompressionMetrics(
+    val originalBytes: Int = 0,
+    val compressedBytes: Int = 0,
+    val compressionRatio: Double = 1.0,
+    val savedPercentage: Double = 0.0,
+    val algorithm: String = "Unishox2",
+    val sampleText: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+) {
+    fun formattedSummary(): String =
+        "Original: ${originalBytes}B | Compressed: ${compressedBytes}B | Ratio: ${"%.2f".format(compressionRatio)}x (Saved: ${"%.1f".format(savedPercentage)}%)"
+
+    companion object {
+        fun from(text: String, compressionEngine: com.example.itantra.compression.CompressionEngine): CompressionMetrics {
+            val raw = text.toByteArray(Charsets.UTF_8).size
+            val compBytes = compressionEngine.compressText(text)
+            val comp = compBytes.size.coerceAtLeast(1)
+            val ratio = if (comp > 0) raw.toDouble() / comp.toDouble() else 1.0
+            val saved = if (raw > 0) ((raw - comp).toDouble() / raw.toDouble()) * 100.0 else 0.0
+            return CompressionMetrics(
+                originalBytes = raw,
+                compressedBytes = comp,
+                compressionRatio = ratio,
+                savedPercentage = saved,
+                algorithm = "Unishox2",
+                sampleText = text,
+                timestamp = System.currentTimeMillis()
+            )
+        }
+
+        fun from(text: String, compressedBytesCount: Int, algorithm: String = "Unishox2"): CompressionMetrics {
+            val raw = text.toByteArray(Charsets.UTF_8).size
+            val comp = compressedBytesCount.coerceAtLeast(1)
+            val ratio = if (comp > 0) raw.toDouble() / comp.toDouble() else 1.0
+            val saved = if (raw > 0) ((raw - comp).toDouble() / raw.toDouble()) * 100.0 else 0.0
+            return CompressionMetrics(
+                originalBytes = raw,
+                compressedBytes = comp,
+                compressionRatio = ratio,
+                savedPercentage = saved,
+                algorithm = algorithm,
+                sampleText = text,
+                timestamp = System.currentTimeMillis()
+            )
+        }
+    }
+}
+
 // ============================================================================
 // 6. ISRO / NAVIC EMERGENCY ALERTS
 // ============================================================================
@@ -365,6 +413,7 @@ data class AppState(
     val audioLevel: Float = 0f,
     val verticalSliceTimestamps: VerticalSliceTimestamps = VerticalSliceTimestamps(),
     val lastLatencyMetrics: LatencyMetrics? = null,
+    val lastCompressionMetrics: CompressionMetrics? = null,
     val lastAudioDebugInfo: AudioDebugInfo? = null,
     val hasAudioPermission: Boolean = false,
     val statusMessage: String? = "Ready",

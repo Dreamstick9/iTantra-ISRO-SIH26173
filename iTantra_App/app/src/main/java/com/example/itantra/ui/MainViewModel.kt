@@ -8,6 +8,7 @@ import com.example.itantra.audio.AudioTrackPlayer
 import com.example.itantra.audio.MockAudioEngine
 import com.example.itantra.compression.CompressionEngine
 import com.example.itantra.compression.MockCompressionEngine
+import com.example.itantra.compression.Unishox2CompressionEngine
 import com.example.itantra.data.*
 import com.example.itantra.service.MockServiceController
 import com.example.itantra.service.ServiceController
@@ -41,7 +42,7 @@ class MainViewModel(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     val ttsEngine: TtsEngine = MockTtsEngine(ioDispatcher = ioDispatcher),
     val transportEngine: TransportEngine = MockTransportEngine(),
-    val compressionEngine: CompressionEngine = MockCompressionEngine(),
+    val compressionEngine: CompressionEngine = Unishox2CompressionEngine(),
     val serviceController: ServiceController = MockServiceController(),
     val audioTrackPlayer: AudioTrackPlayer = AudioTrackPlayer(ioDispatcher),
     val vadEngine: com.example.itantra.vad.VadEngine = com.example.itantra.vad.MockVadEngine()
@@ -408,6 +409,8 @@ class MainViewModel(
                     endToEndLatencyMs = t2 - t0
                 )
 
+                val compMetrics = CompressionMetrics.from(recognizedText, compressionEngine)
+
                 val latencyMetrics = vsTimestamps.toLatencyMetrics(
                     audioDurationMs = audioDurationMs,
                     characterCount = recognizedText.length,
@@ -426,7 +429,7 @@ class MainViewModel(
                     isEmergency = isEmergency,
                     latencyMetrics = latencyMetrics,
                     rawUtf8ByteSize = recognizedText.toByteArray(Charsets.UTF_8).size,
-                    compressedByteSize = (recognizedText.length * 0.75).toInt().coerceAtLeast(1),
+                    compressedByteSize = message.compressedPayload.size,
                     isOutgoing = true
                 )
 
@@ -441,7 +444,7 @@ class MainViewModel(
                     )
 
                     val updatedMessages = listOf(outgoingMessage) + state.messages
-                    val updatedStatus = "Audio captured successfully (${pcmAudio.size} bytes, ${audioDurationMs}ms) | STT: \"$recognizedText\" (${sttLatency}ms) | Sent (${t2 - t0}ms)"
+                    val updatedStatus = "Audio captured successfully (${pcmAudio.size} bytes, ${audioDurationMs}ms) | STT: \"$recognizedText\" (${sttLatency}ms) | Sent (${t2 - t0}ms) | Unishox2: ${compMetrics.originalBytes}B -> ${compMetrics.compressedBytes}B (${"%.1f".format(compMetrics.savedPercentage)}% saved)"
 
                     state.copy(
                         transceiverState = TransceiverState.IDLE,
@@ -451,6 +454,7 @@ class MainViewModel(
                         messages = updatedMessages,
                         verticalSliceTimestamps = vsTimestamps,
                         lastLatencyMetrics = latencyMetrics,
+                        lastCompressionMetrics = compMetrics,
                         statusMessage = updatedStatus,
                         errorMessage = null
                     )
@@ -745,7 +749,12 @@ class MainViewModel(
                                     sttLatencyMs = sttLatency,
                                     endToEndLatencyMs = t2 - t0
                                 )
-                                val latencyMetrics = vsTimestamps.toLatencyMetrics(audioDurationMs)
+                                val compMetrics = CompressionMetrics.from(recognizedText, compressionEngine)
+                                val latencyMetrics = vsTimestamps.toLatencyMetrics(
+                                    audioDurationMs = audioDurationMs,
+                                    characterCount = recognizedText.length,
+                                    compressedByteSize = outgoingMsg.compressedPayload.size
+                                )
 
                                 val localMessage = ReceivedMessage(
                                     senderId = "local_node",
@@ -753,6 +762,8 @@ class MainViewModel(
                                     text = recognizedText,
                                     originalLanguage = _appState.value.inputLanguage,
                                     latencyMetrics = latencyMetrics,
+                                    rawUtf8ByteSize = recognizedText.toByteArray(Charsets.UTF_8).size,
+                                    compressedByteSize = outgoingMsg.compressedPayload.size,
                                     isOutgoing = true,
                                     playbackStatus = MessagePlaybackStatus.PLAYED
                                 )
@@ -762,7 +773,8 @@ class MainViewModel(
                                         messages = s.messages + localMessage,
                                         currentLiveTranscription = recognizedText,
                                         verticalSliceTimestamps = vsTimestamps,
-                                        lastLatencyMetrics = latencyMetrics
+                                        lastLatencyMetrics = latencyMetrics,
+                                        lastCompressionMetrics = compMetrics
                                     )
                                 }
                             }
@@ -906,14 +918,18 @@ class MainViewModel(
         viewModelScope.launch(ioDispatcher) {
             try {
                 transportEngine.send(message)
+                val compMetrics = CompressionMetrics.from(message.text, compressionEngine)
                 val uiMsg = message.toReceivedMessage().copy(
                     isOutgoing = true,
-                    senderName = "Local Operator (You)"
+                    senderName = "Local Operator (You)",
+                    rawUtf8ByteSize = message.text.toByteArray(Charsets.UTF_8).size,
+                    compressedByteSize = message.compressedPayload.size
                 )
                 _appState.update {
                     it.copy(
                         messages = listOf(uiMsg) + it.messages,
-                        statusMessage = "Sent: \"${text.take(30)}\""
+                        lastCompressionMetrics = compMetrics,
+                        statusMessage = "Transmitted: \"${text.take(30)}\" | Unishox2: ${compMetrics.originalBytes}B -> ${compMetrics.compressedBytes}B (${"%.1f".format(compMetrics.savedPercentage)}% saved)"
                     )
                 }
             } catch (e: Exception) {
@@ -933,14 +949,18 @@ class MainViewModel(
         viewModelScope.launch(ioDispatcher) {
             try {
                 transportEngine.send(alert)
+                val compMetrics = CompressionMetrics.from(alert.text, compressionEngine)
                 val uiMsg = alert.toReceivedMessage().copy(
                     isOutgoing = true,
-                    senderName = "Local Operator (You)"
+                    senderName = "Local Operator (You)",
+                    rawUtf8ByteSize = alert.text.toByteArray(Charsets.UTF_8).size,
+                    compressedByteSize = alert.compressedPayload.size
                 )
                 _appState.update {
                     it.copy(
                         messages = listOf(uiMsg) + it.messages,
-                        statusMessage = "BROADCAST ALERT SENT"
+                        lastCompressionMetrics = compMetrics,
+                        statusMessage = "BROADCAST ALERT SENT | Unishox2: ${compMetrics.originalBytes}B -> ${compMetrics.compressedBytes}B (${"%.1f".format(compMetrics.savedPercentage)}% saved)"
                     )
                 }
             } catch (e: Exception) {
@@ -1089,9 +1109,13 @@ class MainViewModel(
                 realTimeFactor = if (audioData.durationMs > 0) ttsLatency.toDouble() / audioData.durationMs.toDouble() else 0.0
             )
 
+            val compMetrics = CompressionMetrics.from(text, compressionEngine)
+
             val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
                 playbackStatus = MessagePlaybackStatus.PLAYING,
-                latencyMetrics = latencyMetrics
+                latencyMetrics = latencyMetrics,
+                rawUtf8ByteSize = text.toByteArray(Charsets.UTF_8).size,
+                compressedByteSize = message.compressedPayload.size
             )
 
             _appState.update { state ->
@@ -1099,9 +1123,10 @@ class MainViewModel(
                 state.copy(
                     messages = newMessages,
                     isAudioPlaying = true,
-                    statusMessage = "Playing voice from ${receivedMsg.senderName}",
+                    statusMessage = "Playing voice from ${receivedMsg.senderName} | Unishox2: ${compMetrics.originalBytes}B -> ${compMetrics.compressedBytes}B (${"%.1f".format(compMetrics.savedPercentage)}% saved)",
                     verticalSliceTimestamps = vsTimestamps,
-                    lastLatencyMetrics = latencyMetrics
+                    lastLatencyMetrics = latencyMetrics,
+                    lastCompressionMetrics = compMetrics
                 )
             }
 

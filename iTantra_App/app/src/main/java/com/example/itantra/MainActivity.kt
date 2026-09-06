@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
                     speechEngine = SherpaOnnxSpeechEngine(applicationContext),
                     ttsEngine = SherpaOnnxTtsEngine(applicationContext),
                     transportEngine = WifiDirectTransportEngine(applicationContext),
+                    compressionEngine = com.example.itantra.compression.Unishox2CompressionEngine(),
                     vadEngine = com.example.itantra.vad.SherpaSileroVadEngine(applicationContext)
                 ) as T
             }

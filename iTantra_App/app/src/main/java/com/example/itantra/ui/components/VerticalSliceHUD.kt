@@ -55,6 +55,7 @@ fun VerticalSliceHUD(
     transceiverState: TransceiverState,
     timestamps: VerticalSliceTimestamps,
     metrics: LatencyMetrics? = null,
+    compressionMetrics: com.example.itantra.data.CompressionMetrics? = null,
     continuousState: com.example.itantra.data.ContinuousModeState = com.example.itantra.data.ContinuousModeState.IDLE,
     transmissionMode: com.example.itantra.data.TransmissionMode = com.example.itantra.data.TransmissionMode.PUSH_TO_TALK,
     modifier: Modifier = Modifier
@@ -135,6 +136,9 @@ fun VerticalSliceHUD(
 
             // 3. Timestamps Display (t0..t5 in HH:mm:ss.SSS)
             TimestampsDisplaySection(timestamps = timestamps)
+
+            // 4. Bandwidth & Unishox2 Compression Telemetry Section
+            CompressionTelemetrySection(compressionMetrics = compressionMetrics)
         }
     }
 }
@@ -782,3 +786,222 @@ private fun formatTimestampWithMillis(epochMs: Long): String {
         "--:--:--"
     }
 }
+
+// ============================================================================
+// 4. UNISHOX2 BANDWIDTH & COMPRESSION TELEMETRY SECTION
+// ============================================================================
+
+@Composable
+private fun CompressionTelemetrySection(
+    compressionMetrics: com.example.itantra.data.CompressionMetrics?,
+    modifier: Modifier = Modifier
+) {
+    val originalBytes = compressionMetrics?.originalBytes ?: 0
+    val compressedBytes = compressionMetrics?.compressedBytes ?: 0
+    val ratio = compressionMetrics?.compressionRatio ?: 1.0
+    val savedPercentage = compressionMetrics?.savedPercentage ?: 0.0
+    val isMeasured = originalBytes > 0 && compressedBytes > 0
+
+    val badgeColor = when {
+        savedPercentage >= 50.0 -> Color(0xFF00E676) // Bright Green
+        savedPercentage >= 25.0 -> Color(0xFF00E5FF) // Vibrant Cyan
+        savedPercentage > 0.0 -> Color(0xFFFFD54F)   // Amber
+        else -> MaterialTheme.colorScheme.outline
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    badgeColor.copy(alpha = 0.35f),
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                )
+            )
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Compress,
+                        contentDescription = "Compression",
+                        tint = badgeColor,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = "UNISHOX2 COMPRESSION TELEMETRY",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = badgeColor,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = badgeColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = if (isMeasured) "${"%.1f".format(savedPercentage)}% SAVED" else "UNISHOX2 READY",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = if (isMeasured) badgeColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // Metrics Grid: 4 columns (Original, Compressed, Ratio, Saved)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // Original Bytes
+                CompressionMetricCard(
+                    title = "ORIGINAL",
+                    value = if (isMeasured) "${originalBytes} B" else "-- B",
+                    subtitle = "Raw UTF-8",
+                    accentColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Compressed Bytes
+                CompressionMetricCard(
+                    title = "COMPRESSED",
+                    value = if (isMeasured) "${compressedBytes} B" else "-- B",
+                    subtitle = "Unishox2",
+                    accentColor = Color(0xFF00E5FF),
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Ratio
+                CompressionMetricCard(
+                    title = "RATIO",
+                    value = if (isMeasured) "${"%.2f".format(ratio)}x" else "1.00x",
+                    subtitle = "Factor",
+                    accentColor = Color(0xFFFFB300),
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Bandwidth Reduction
+                CompressionMetricCard(
+                    title = "BANDWIDTH",
+                    value = if (isMeasured) "${"%.1f".format(savedPercentage)}%" else "0.0%",
+                    subtitle = "Saved",
+                    accentColor = badgeColor,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Visual Reduction Bar
+            if (isMeasured && originalBytes > 0) {
+                val compressedFraction = (compressedBytes.toFloat() / originalBytes.toFloat()).coerceIn(0.05f, 1f)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Wire Payload (${compressedBytes} / ${originalBytes} bytes)",
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${"%.1f".format(savedPercentage)}% airtime reduction",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = badgeColor
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(compressedFraction)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color(0xFF00E5FF),
+                                            badgeColor
+                                        )
+                                    )
+                                )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompressionMetricCard(
+    title: String,
+    value: String,
+    subtitle: String,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = title,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = value,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                color = accentColor,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = subtitle,
+                fontSize = 7.sp,
+                color = MaterialTheme.colorScheme.outline,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
