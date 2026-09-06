@@ -15,5 +15,7 @@ interface AudioEngine {
 
     suspend fun startRecording()
     suspend fun stopRecording(): ByteArray
+    fun startAudioStream(): kotlinx.coroutines.flow.Flow<ByteArray> = kotlinx.coroutines.flow.emptyFlow()
+    fun stopAudioStream() {}
     fun release() {}
 }

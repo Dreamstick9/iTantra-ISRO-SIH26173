@@ -26,6 +26,7 @@ import com.example.itantra.tts.TtsPlaybackState
 import com.example.itantra.util.Logger
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,7 +43,8 @@ class MainViewModel(
     val transportEngine: TransportEngine = MockTransportEngine(),
     val compressionEngine: CompressionEngine = MockCompressionEngine(),
     val serviceController: ServiceController = MockServiceController(),
-    val audioTrackPlayer: AudioTrackPlayer = AudioTrackPlayer(ioDispatcher)
+    val audioTrackPlayer: AudioTrackPlayer = AudioTrackPlayer(ioDispatcher),
+    val vadEngine: com.example.itantra.vad.VadEngine = com.example.itantra.vad.MockVadEngine()
 ) : ViewModel() {
 
     private val TAG = "MainViewModel"
@@ -59,6 +61,7 @@ class MainViewModel(
         (audioEngine as? MockAudioEngine)?.initialize()
         speechEngine.initialize()
         transportEngine.initialize()
+        vadEngine.initialize()
 
         // Observe audio level stream for real-time visual feedback
         viewModelScope.launch(ioDispatcher) {
@@ -474,13 +477,322 @@ class MainViewModel(
         }
     }
 
+    private var continuousModeJob: Job? = null
+
     fun onTransmissionModeChanged(mode: TransmissionMode) {
+        if (mode == TransmissionMode.PUSH_TO_TALK) {
+            stopContinuousMode()
+        }
         transportEngine.setTransmissionMode(mode)
         _appState.update {
             it.copy(
                 transmissionMode = mode,
                 statusMessage = "Mode: ${mode.displayName}"
             )
+        }
+    }
+
+    fun onToggleContinuousMode() {
+        if (_appState.value.continuousModeState == ContinuousModeState.IDLE) {
+            startContinuousMode()
+        } else {
+            stopContinuousMode()
+        }
+    }
+
+    fun startContinuousMode() {
+        if (continuousModeJob?.isActive == true) return
+
+        _appState.update {
+            it.copy(
+                transmissionMode = TransmissionMode.CONTINUOUS,
+                continuousModeState = ContinuousModeState.LISTENING,
+                transceiverState = TransceiverState.IDLE,
+                statusMessage = "Listening for speech (Silero VAD)..."
+            )
+        }
+
+        continuousModeJob = viewModelScope.launch(ioDispatcher) {
+            runContinuousTransceiverLoop()
+        }
+    }
+
+    fun stopContinuousMode() {
+        continuousModeJob?.cancel()
+        continuousModeJob = null
+        audioEngine.stopAudioStream()
+        vadEngine.reset()
+
+        _appState.update {
+            it.copy(
+                continuousModeState = ContinuousModeState.IDLE,
+                transceiverState = TransceiverState.IDLE,
+                statusMessage = "Continuous mode stopped."
+            )
+        }
+    }
+
+    private suspend fun runContinuousTransceiverLoop() {
+        val preSpeechBuffer = java.util.ArrayDeque<ByteArray>()
+        val utteranceChunks = mutableListOf<ByteArray>()
+        var currentState = ContinuousModeState.LISTENING
+        var t0 = 0L
+        var t1 = 0L
+        var t2 = 0L
+
+        try {
+            audioEngine.startAudioStream().collect { chunk ->
+                // 1. Acoustic Echo Suppression:
+                // While incoming TTS is rendering over speaker, pause VAD listening
+                // so the microphone does not transcribe local speaker playback.
+                if (_appState.value.transceiverState == TransceiverState.SPEAKING) {
+                    vadEngine.reset()
+                    preSpeechBuffer.clear()
+                    if (currentState != ContinuousModeState.LISTENING) {
+                        currentState = ContinuousModeState.LISTENING
+                        _appState.update {
+                            it.copy(
+                                continuousModeState = ContinuousModeState.LISTENING,
+                                transceiverState = TransceiverState.IDLE
+                            )
+                        }
+                    }
+                    return@collect
+                }
+
+                // 2. Convert PCM chunk to float and feed to Silero VAD
+                val floatSamples = com.example.itantra.speech.PcmAudioConverter.pcm16LeToFloatArray(chunk)
+                if (floatSamples.isNotEmpty()) {
+                    vadEngine.acceptWaveform(floatSamples)
+                }
+                val isSpeech = vadEngine.isSpeechDetected()
+
+                // 3. Sequential 8-state machine transitions
+                when (currentState) {
+                    ContinuousModeState.IDLE -> {
+                        // Inactive
+                    }
+
+                    ContinuousModeState.LISTENING -> {
+                        if (isSpeech) {
+                            // Speech detected by Silero VAD
+                            currentState = ContinuousModeState.SPEECH_DETECTED
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.SPEECH_DETECTED,
+                                    statusMessage = "Speech detected! Initializing capture..."
+                                )
+                            }
+
+                            // Immediate transition to RECORDING
+                            currentState = ContinuousModeState.RECORDING
+                            utteranceChunks.clear()
+                            // Prepend pre-speech ring buffer so initial syllables are preserved
+                            utteranceChunks.addAll(preSpeechBuffer)
+                            preSpeechBuffer.clear()
+                            utteranceChunks.add(chunk)
+
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.RECORDING,
+                                    transceiverState = TransceiverState.RECORDING,
+                                    statusMessage = "Recording utterance..."
+                                )
+                            }
+                        } else {
+                            // Non-speech: maintain 320ms sliding pre-speech buffer (10 frames)
+                            if (preSpeechBuffer.size >= 10) {
+                                preSpeechBuffer.removeFirst()
+                            }
+                            preSpeechBuffer.addLast(chunk)
+                        }
+                    }
+
+                    ContinuousModeState.SPEECH_DETECTED -> {
+                        currentState = ContinuousModeState.RECORDING
+                        utteranceChunks.add(chunk)
+                        _appState.update {
+                            it.copy(
+                                continuousModeState = ContinuousModeState.RECORDING,
+                                transceiverState = TransceiverState.RECORDING
+                            )
+                        }
+                    }
+
+                    ContinuousModeState.RECORDING -> {
+                        utteranceChunks.add(chunk)
+
+                        val currentBytes = utteranceChunks.sumOf { it.size }
+                        val isOverMax = currentBytes >= 20 * AudioConfig.BYTES_PER_SECOND
+
+                        if (!isSpeech || isOverMax) {
+                            // Silence onset detected by Silero VAD
+                            currentState = ContinuousModeState.POSSIBLE_END
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.POSSIBLE_END,
+                                    statusMessage = "Speech pause detected, validating silence..."
+                                )
+                            }
+                        }
+                    }
+
+                    ContinuousModeState.POSSIBLE_END -> {
+                        utteranceChunks.add(chunk)
+
+                        if (isSpeech) {
+                            // Inter-word brief pause: speaker resumed talking before silence timeout
+                            currentState = ContinuousModeState.RECORDING
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.RECORDING,
+                                    transceiverState = TransceiverState.RECORDING,
+                                    statusMessage = "Speech resumed. Continuing recording..."
+                                )
+                            }
+                        } else if (vadEngine.hasSegment() || utteranceChunks.size >= 300) {
+                            // Silero VAD confirms silence duration elapsed: finalize utterance
+                            currentState = ContinuousModeState.FINALIZING
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.FINALIZING,
+                                    statusMessage = "Finalizing utterance..."
+                                )
+                            }
+
+                            t0 = System.currentTimeMillis()
+
+                            // Seal utterance audio bytes
+                            val finalizedPcm = synchronized(utteranceChunks) {
+                                val totalBytes = utteranceChunks.sumOf { it.size }
+                                val out = ByteArray(totalBytes)
+                                var offset = 0
+                                for (c in utteranceChunks) {
+                                    System.arraycopy(c, 0, out, offset, c.size)
+                                    offset += c.size
+                                }
+                                utteranceChunks.clear()
+                                out
+                            }
+                            vadEngine.popSegment()
+
+                            if (finalizedPcm.size < 3200) {
+                                Logger.d(TAG, "Utterance too short (<100ms), skipping transcription.")
+                                vadEngine.reset()
+                                preSpeechBuffer.clear()
+                                currentState = ContinuousModeState.LISTENING
+                                _appState.update {
+                                    it.copy(
+                                        continuousModeState = ContinuousModeState.LISTENING,
+                                        transceiverState = TransceiverState.IDLE,
+                                        statusMessage = "Listening for speech..."
+                                    )
+                                }
+                                return@collect
+                            }
+
+                            // Transition to TRANSCRIBING
+                            currentState = ContinuousModeState.TRANSCRIBING
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.TRANSCRIBING,
+                                    transceiverState = TransceiverState.TRANSCRIBING,
+                                    statusMessage = "Transcribing utterance via Sherpa-ONNX..."
+                                )
+                            }
+
+                            val recognizedText = speechEngine.transcribe(finalizedPcm)
+                            t1 = System.currentTimeMillis()
+                            val sttLatency = t1 - t0
+
+                            if (recognizedText.isNotBlank()) {
+                                // Transition to TRANSMITTING
+                                currentState = ContinuousModeState.TRANSMITTING
+                                _appState.update {
+                                    it.copy(
+                                        continuousModeState = ContinuousModeState.TRANSMITTING,
+                                        transceiverState = TransceiverState.TRANSMITTING,
+                                        statusMessage = "Transmitting transcript over Wi-Fi Direct..."
+                                    )
+                                }
+
+                                val audioDurationMs = (finalizedPcm.size * 1000L) / AudioConfig.BYTES_PER_SECOND
+                                val outgoingMsg = TransportMessage.text(
+                                    text = recognizedText,
+                                    t0 = t0,
+                                    t1 = t1,
+                                    sttLatencyMs = sttLatency,
+                                    audioDurationMs = audioDurationMs
+                                )
+
+                                try {
+                                    transportEngine.send(outgoingMsg)
+                                } catch (e: Exception) {
+                                    Logger.w(TAG, "Continuous mode send error: ${e.message}")
+                                }
+
+                                t2 = System.currentTimeMillis()
+                                val vsTimestamps = VerticalSliceTimestamps(
+                                    t0PttReleased = t0,
+                                    t1SttComplete = t1,
+                                    t2Transmitted = t2,
+                                    sttLatencyMs = sttLatency,
+                                    endToEndLatencyMs = t2 - t0
+                                )
+                                val latencyMetrics = vsTimestamps.toLatencyMetrics(audioDurationMs)
+
+                                val localMessage = ReceivedMessage(
+                                    senderId = "local_node",
+                                    senderName = "Local Operator (Hands-Free)",
+                                    text = recognizedText,
+                                    originalLanguage = Language.ENGLISH,
+                                    latencyMetrics = latencyMetrics,
+                                    isOutgoing = true,
+                                    playbackStatus = MessagePlaybackStatus.PLAYED
+                                )
+
+                                _appState.update { s ->
+                                    s.copy(
+                                        messages = s.messages + localMessage,
+                                        currentLiveTranscription = recognizedText,
+                                        verticalSliceTimestamps = vsTimestamps,
+                                        lastLatencyMetrics = latencyMetrics
+                                    )
+                                }
+                            }
+
+                            // Reset VAD and loop cleanly back to LISTENING
+                            vadEngine.reset()
+                            preSpeechBuffer.clear()
+                            currentState = ContinuousModeState.LISTENING
+                            _appState.update {
+                                it.copy(
+                                    continuousModeState = ContinuousModeState.LISTENING,
+                                    transceiverState = TransceiverState.IDLE,
+                                    statusMessage = "Listening for speech (Silero VAD)..."
+                                )
+                            }
+                        }
+                    }
+
+                    ContinuousModeState.FINALIZING,
+                    ContinuousModeState.TRANSCRIBING,
+                    ContinuousModeState.TRANSMITTING -> {
+                        // Strictly serialized: chunks during STT/TX never race with ongoing processing
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            if (e !is kotlinx.coroutines.CancellationException) {
+                Logger.e(TAG, "Continuous mode loop encountered exception: ${e.message}", e)
+            }
+        } finally {
+            _appState.update {
+                it.copy(
+                    continuousModeState = ContinuousModeState.IDLE,
+                    transceiverState = TransceiverState.IDLE
+                )
+            }
         }
     }
 
@@ -895,11 +1207,13 @@ class MainViewModel(
 
     public override fun onCleared() {
         super.onCleared()
+        stopContinuousMode()
         audioEngine.release()
         speechEngine.release()
         ttsEngine.release()
         transportEngine.release()
         audioTrackPlayer.release()
+        vadEngine.release()
         Logger.i(TAG, "MainViewModel cleared.")
     }
 }

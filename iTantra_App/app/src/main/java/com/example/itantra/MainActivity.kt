@@ -28,7 +28,8 @@ class MainActivity : ComponentActivity() {
                     audioEngine = AndroidAudioEngine(applicationContext),
                     speechEngine = SherpaOnnxSpeechEngine(applicationContext),
                     ttsEngine = SherpaOnnxTtsEngine(applicationContext),
-                    transportEngine = WifiDirectTransportEngine(applicationContext)
+                    transportEngine = WifiDirectTransportEngine(applicationContext),
+                    vadEngine = com.example.itantra.vad.SherpaSileroVadEngine(applicationContext)
                 ) as T
             }
         }

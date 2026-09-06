@@ -87,4 +87,11 @@ class MockAudioEngine : AudioEngine {
     fun setSimulatedAudioLevel(level: Float) {
         _audioLevel.value = level.coerceIn(0f, 1f)
     }
+
+    private val _streamFlow = kotlinx.coroutines.flow.MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
+    override fun startAudioStream(): kotlinx.coroutines.flow.Flow<ByteArray> = _streamFlow
+    override fun stopAudioStream() {}
+    fun emitStreamChunk(chunk: ByteArray) {
+        _streamFlow.tryEmit(chunk)
+    }
 }

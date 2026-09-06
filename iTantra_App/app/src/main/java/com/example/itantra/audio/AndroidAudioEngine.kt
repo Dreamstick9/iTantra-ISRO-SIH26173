@@ -13,9 +13,12 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,34 +80,8 @@ class AndroidAudioEngine(
         val bufferSize = maxOf(minBufferSize * 2, 4096)
 
         // 3. AudioRecord instantiation & validation with fallback (VOICE_RECOGNITION -> MIC)
-        val audioSources = listOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            MediaRecorder.AudioSource.MIC
-        )
-
-        var record: AudioRecord? = null
-        for (source in audioSources) {
-            try {
-                val candidate = AudioRecord(
-                    source,
-                    sampleRate,
-                    channelConfig,
-                    audioFormat,
-                    bufferSize
-                )
-                if (candidate.state == AudioRecord.STATE_INITIALIZED) {
-                    record = candidate
-                    Logger.d(TAG, "AudioRecord initialized successfully with audio source: $source")
-                    break
-                } else {
-                    candidate.release()
-                }
-            } catch (e: Exception) {
-                Logger.w(TAG, "AudioRecord failed with source $source: ${e.message}")
-            }
-        }
-
-        if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+        val record = createAndStartAudioRecord(bufferSize)
+        if (record == null) {
             Logger.e(TAG, "AudioRecord failed to initialize with all audio sources.")
             safeReleaseRecord()
             _recordingState.value = AudioRecordingState.ERROR
@@ -112,22 +89,6 @@ class AndroidAudioEngine(
         }
 
         audioRecord = record
-
-        try {
-            record.startRecording()
-        } catch (e: Exception) {
-            Logger.e(TAG, "AudioRecord.startRecording failed: ${e.message}", e)
-            safeReleaseRecord()
-            _recordingState.value = AudioRecordingState.ERROR
-            throw e
-        }
-
-        if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            Logger.e(TAG, "AudioRecord failed to enter RECORDSTATE_RECORDING: ${record.recordingState}")
-            safeReleaseRecord()
-            _recordingState.value = AudioRecordingState.ERROR
-            throw IllegalStateException("AudioRecord failed to enter recording state.")
-        }
 
         synchronized(audioOutputStream) {
             audioOutputStream.reset()
@@ -199,6 +160,130 @@ class AndroidAudioEngine(
         val durationSeconds = pcmBytes.size / AudioConfig.BYTES_PER_SECOND.toFloat()
         Logger.i(TAG, "AudioRecord stopped: Captured ${pcmBytes.size} PCM bytes (%.2f seconds)".format(durationSeconds))
         return@withContext pcmBytes
+    }
+
+    @SuppressLint("MissingPermission")
+    override fun startAudioStream(): Flow<ByteArray> = callbackFlow {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            close(SecurityException("Microphone permission (RECORD_AUDIO) is not granted."))
+            return@callbackFlow
+        }
+
+        val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+        val bufferSize = maxOf(minBufferSize * 2, 4096)
+        val record = createAndStartAudioRecord(bufferSize)
+        if (record == null) {
+            close(IllegalStateException("Failed to initialize and start AudioRecord."))
+            return@callbackFlow
+        }
+
+        audioRecord = record
+        isCapturing.set(true)
+        _recordingState.value = AudioRecordingState.RECORDING
+
+        // 512 samples @ 16kHz 16-bit mono = 1024 bytes per frame (32ms chunk)
+        val frameSizeBytes = 1024
+        val chunkBuffer = ByteArray(frameSizeBytes)
+
+        val streamJob = launch(ioDispatcher) {
+            try {
+                while (isCapturing.get() && isActive) {
+                    var bytesReadTotal = 0
+                    while (bytesReadTotal < frameSizeBytes && isCapturing.get() && isActive) {
+                        val read = record.read(chunkBuffer, bytesReadTotal, frameSizeBytes - bytesReadTotal)
+                        if (read > 0) {
+                            bytesReadTotal += read
+                        } else if (read < 0) {
+                            Logger.w(TAG, "AudioRecord read returned error: $read")
+                            break
+                        }
+                    }
+
+                    if (bytesReadTotal == frameSizeBytes) {
+                        val chunkCopy = chunkBuffer.copyOf()
+                        computeAndEmitAudioLevel(chunkCopy, chunkCopy.size)
+                        trySend(chunkCopy)
+                    } else if (bytesReadTotal > 0) {
+                        val partialCopy = chunkBuffer.copyOf(bytesReadTotal)
+                        computeAndEmitAudioLevel(partialCopy, partialCopy.size)
+                        trySend(partialCopy)
+                    }
+                }
+            } catch (e: Exception) {
+                Logger.e(TAG, "Exception during audio streaming: ${e.message}", e)
+            } finally {
+                _audioLevel.value = 0f
+            }
+        }
+
+        awaitClose {
+            isCapturing.set(false)
+            streamJob.cancel()
+            safeReleaseRecord()
+            _recordingState.value = AudioRecordingState.IDLE
+            _audioLevel.value = 0f
+        }
+    }
+
+    override fun stopAudioStream() {
+        isCapturing.set(false)
+        captureJob?.cancel()
+        captureJob = null
+        safeReleaseRecord()
+        _recordingState.value = AudioRecordingState.IDLE
+        _audioLevel.value = 0f
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun createAndStartAudioRecord(bufferSize: Int): AudioRecord? {
+        val audioSources = listOf(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC
+        )
+
+        var record: AudioRecord? = null
+        for (source in audioSources) {
+            try {
+                val candidate = AudioRecord(
+                    source,
+                    sampleRate,
+                    channelConfig,
+                    audioFormat,
+                    bufferSize
+                )
+                if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+                    record = candidate
+                    Logger.d(TAG, "AudioRecord initialized successfully with audio source: $source")
+                    break
+                } else {
+                    candidate.release()
+                }
+            } catch (e: Exception) {
+                Logger.w(TAG, "AudioRecord failed with source $source: ${e.message}")
+            }
+        }
+
+        if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
+            return null
+        }
+
+        try {
+            record.startRecording()
+        } catch (e: Exception) {
+            Logger.e(TAG, "AudioRecord.startRecording failed: ${e.message}", e)
+            safeReleaseRecord()
+            return null
+        }
+
+        if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            Logger.e(TAG, "AudioRecord failed to enter RECORDSTATE_RECORDING: ${record.recordingState}")
+            safeReleaseRecord()
+            return null
+        }
+
+        return record
     }
 
     override fun release() {

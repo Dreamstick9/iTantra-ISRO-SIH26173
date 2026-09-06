@@ -55,6 +55,8 @@ fun VerticalSliceHUD(
     transceiverState: TransceiverState,
     timestamps: VerticalSliceTimestamps,
     metrics: LatencyMetrics? = null,
+    continuousState: com.example.itantra.data.ContinuousModeState = com.example.itantra.data.ContinuousModeState.IDLE,
+    transmissionMode: com.example.itantra.data.TransmissionMode = com.example.itantra.data.TransmissionMode.PUSH_TO_TALK,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -119,7 +121,11 @@ fun VerticalSliceHUD(
             }
 
             // 1. Active Pipeline Status Banner
-            ActivePipelineStatusBanner(transceiverState = transceiverState)
+            ActivePipelineStatusBanner(
+                transceiverState = transceiverState,
+                continuousState = continuousState,
+                transmissionMode = transmissionMode
+            )
 
             // 2. Latency Telemetry Card
             LatencyTelemetrySection(
@@ -139,17 +145,34 @@ fun VerticalSliceHUD(
 
 @Composable
 private fun ActivePipelineStatusBanner(
-    transceiverState: TransceiverState
+    transceiverState: TransceiverState,
+    continuousState: com.example.itantra.data.ContinuousModeState = com.example.itantra.data.ContinuousModeState.IDLE,
+    transmissionMode: com.example.itantra.data.TransmissionMode = com.example.itantra.data.TransmissionMode.PUSH_TO_TALK
 ) {
-    // Distinctive state colors:
-    // Red (REC), Amber (STT), Cyan (TX), Purple (RX), Green (SPEAKING), Slate/Teal (IDLE)
-    val stateColor = when (transceiverState) {
-        TransceiverState.RECORDING -> Color(0xFFFF1744)   // Red
-        TransceiverState.TRANSCRIBING -> Color(0xFFFFB300) // Amber
-        TransceiverState.TRANSMITTING -> Color(0xFF00E5FF) // Cyan
-        TransceiverState.RECEIVING -> Color(0xFFD500F9)    // Purple
-        TransceiverState.SPEAKING -> Color(0xFF00E676)     // Green
-        TransceiverState.IDLE -> Color(0xFF78909C)         // Slate / Tactical Grey
+    val isContinuousActive = (transmissionMode == com.example.itantra.data.TransmissionMode.CONTINUOUS &&
+            transceiverState != TransceiverState.RECEIVING &&
+            transceiverState != TransceiverState.SPEAKING)
+
+    val stateColor = if (isContinuousActive) {
+        when (continuousState) {
+            com.example.itantra.data.ContinuousModeState.IDLE -> Color(0xFF78909C)
+            com.example.itantra.data.ContinuousModeState.LISTENING -> Color(0xFF00B0FF)
+            com.example.itantra.data.ContinuousModeState.SPEECH_DETECTED -> Color(0xFFFFD600)
+            com.example.itantra.data.ContinuousModeState.RECORDING -> Color(0xFFFF1744)
+            com.example.itantra.data.ContinuousModeState.POSSIBLE_END -> Color(0xFFFF9100)
+            com.example.itantra.data.ContinuousModeState.FINALIZING -> Color(0xFFE040FB)
+            com.example.itantra.data.ContinuousModeState.TRANSCRIBING -> Color(0xFFFFB300)
+            com.example.itantra.data.ContinuousModeState.TRANSMITTING -> Color(0xFF00E5FF)
+        }
+    } else {
+        when (transceiverState) {
+            TransceiverState.RECORDING -> Color(0xFFFF1744)   // Red
+            TransceiverState.TRANSCRIBING -> Color(0xFFFFB300) // Amber
+            TransceiverState.TRANSMITTING -> Color(0xFF00E5FF) // Cyan
+            TransceiverState.RECEIVING -> Color(0xFFD500F9)    // Purple
+            TransceiverState.SPEAKING -> Color(0xFF00E676)     // Green
+            TransceiverState.IDLE -> Color(0xFF78909C)         // Slate / Tactical Grey
+        }
     }
 
     val animatedStateColor by animateColorAsState(
@@ -158,31 +181,70 @@ private fun ActivePipelineStatusBanner(
         label = "HUDStateColor"
     )
 
-    val stateTitle = when (transceiverState) {
-        TransceiverState.RECORDING -> "RECORDING"
-        TransceiverState.TRANSCRIBING -> "TRANSCRIBING"
-        TransceiverState.TRANSMITTING -> "TRANSMITTING"
-        TransceiverState.RECEIVING -> "RECEIVING"
-        TransceiverState.SPEAKING -> "SPEAKING"
-        TransceiverState.IDLE -> "IDLE / READY"
+    val stateTitle = if (isContinuousActive) {
+        when (continuousState) {
+            com.example.itantra.data.ContinuousModeState.IDLE -> "CONTINUOUS IDLE"
+            com.example.itantra.data.ContinuousModeState.LISTENING -> "LISTENING (SILERO VAD)"
+            com.example.itantra.data.ContinuousModeState.SPEECH_DETECTED -> "SPEECH DETECTED"
+            com.example.itantra.data.ContinuousModeState.RECORDING -> "RECORDING UTTERANCE"
+            com.example.itantra.data.ContinuousModeState.POSSIBLE_END -> "POSSIBLE END (VALIDATING)"
+            com.example.itantra.data.ContinuousModeState.FINALIZING -> "FINALIZING UTTERANCE"
+            com.example.itantra.data.ContinuousModeState.TRANSCRIBING -> "TRANSCRIBING (STT)"
+            com.example.itantra.data.ContinuousModeState.TRANSMITTING -> "TRANSMITTING (TCP)"
+        }
+    } else {
+        when (transceiverState) {
+            TransceiverState.RECORDING -> "RECORDING"
+            TransceiverState.TRANSCRIBING -> "TRANSCRIBING"
+            TransceiverState.TRANSMITTING -> "TRANSMITTING"
+            TransceiverState.RECEIVING -> "RECEIVING"
+            TransceiverState.SPEAKING -> "SPEAKING"
+            TransceiverState.IDLE -> "IDLE / READY"
+        }
     }
 
-    val stateDescription = when (transceiverState) {
-        TransceiverState.RECORDING -> "Capturing 16kHz mono PCM microphone audio..."
-        TransceiverState.TRANSCRIBING -> "Running on-device offline STT inference..."
-        TransceiverState.TRANSMITTING -> "Transmitting compressed packet over Wi-Fi Direct..."
-        TransceiverState.RECEIVING -> "Inbound packet stream received from remote node..."
-        TransceiverState.SPEAKING -> "Synthesizing voice & playing audio via TTS..."
-        TransceiverState.IDLE -> "Transceiver standby. Half-duplex link idle."
+    val stateDescription = if (isContinuousActive) {
+        when (continuousState) {
+            com.example.itantra.data.ContinuousModeState.IDLE -> "Hands-free continuous mode standby. Tap 'Start Listening'."
+            com.example.itantra.data.ContinuousModeState.LISTENING -> "AudioRecord streaming frames into Silero VAD..."
+            com.example.itantra.data.ContinuousModeState.SPEECH_DETECTED -> "Speech onset confirmed. Initializing capture buffer..."
+            com.example.itantra.data.ContinuousModeState.RECORDING -> "Capturing utterance with pre-speech audio preserved..."
+            com.example.itantra.data.ContinuousModeState.POSSIBLE_END -> "Speech paused. Measuring silence duration..."
+            com.example.itantra.data.ContinuousModeState.FINALIZING -> "Silence threshold confirmed. Sealing audio frame buffer..."
+            com.example.itantra.data.ContinuousModeState.TRANSCRIBING -> "Running on-device Sherpa-ONNX Zipformer STT..."
+            com.example.itantra.data.ContinuousModeState.TRANSMITTING -> "Sending recognized text across Wi-Fi Direct TCP..."
+        }
+    } else {
+        when (transceiverState) {
+            TransceiverState.RECORDING -> "Capturing 16kHz mono PCM microphone audio..."
+            TransceiverState.TRANSCRIBING -> "Running on-device offline STT inference..."
+            TransceiverState.TRANSMITTING -> "Transmitting compressed packet over Wi-Fi Direct..."
+            TransceiverState.RECEIVING -> "Inbound packet stream received from remote node..."
+            TransceiverState.SPEAKING -> "Synthesizing voice & playing audio via TTS..."
+            TransceiverState.IDLE -> "Transceiver standby. Half-duplex link idle."
+        }
     }
 
-    val stateIcon: ImageVector = when (transceiverState) {
-        TransceiverState.RECORDING -> Icons.Default.Mic
-        TransceiverState.TRANSCRIBING -> Icons.Default.GraphicEq
-        TransceiverState.TRANSMITTING -> Icons.Default.CellTower
-        TransceiverState.RECEIVING -> Icons.Default.Sensors
-        TransceiverState.SPEAKING -> Icons.AutoMirrored.Filled.VolumeUp
-        TransceiverState.IDLE -> Icons.Default.RadioButtonChecked
+    val stateIcon: ImageVector = if (isContinuousActive) {
+        when (continuousState) {
+            com.example.itantra.data.ContinuousModeState.IDLE -> Icons.Default.HearingDisabled
+            com.example.itantra.data.ContinuousModeState.LISTENING -> Icons.Default.Hearing
+            com.example.itantra.data.ContinuousModeState.SPEECH_DETECTED -> Icons.Default.VoiceChat
+            com.example.itantra.data.ContinuousModeState.RECORDING -> Icons.Default.Mic
+            com.example.itantra.data.ContinuousModeState.POSSIBLE_END -> Icons.Default.HourglassEmpty
+            com.example.itantra.data.ContinuousModeState.FINALIZING -> Icons.Default.CheckCircle
+            com.example.itantra.data.ContinuousModeState.TRANSCRIBING -> Icons.Default.GraphicEq
+            com.example.itantra.data.ContinuousModeState.TRANSMITTING -> Icons.Default.CellTower
+        }
+    } else {
+        when (transceiverState) {
+            TransceiverState.RECORDING -> Icons.Default.Mic
+            TransceiverState.TRANSCRIBING -> Icons.Default.GraphicEq
+            TransceiverState.TRANSMITTING -> Icons.Default.CellTower
+            TransceiverState.RECEIVING -> Icons.Default.Sensors
+            TransceiverState.SPEAKING -> Icons.AutoMirrored.Filled.VolumeUp
+            TransceiverState.IDLE -> Icons.Default.RadioButtonChecked
+        }
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "PulseAnim")

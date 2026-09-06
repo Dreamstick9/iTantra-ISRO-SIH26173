@@ -80,6 +80,27 @@ enum class TransmissionMode(val displayName: String, val description: String) {
     CONTINUOUS("Continuous Voice (Phone Mode)", "Phone mode. Hands-free VAD pause-detected streaming.")
 }
 
+enum class ContinuousModeState {
+    IDLE,
+    LISTENING,
+    SPEECH_DETECTED,
+    RECORDING,
+    POSSIBLE_END,
+    FINALIZING,
+    TRANSCRIBING,
+    TRANSMITTING;
+
+    val isIdle: Boolean get() = this == IDLE
+    val isListening: Boolean get() = this == LISTENING
+    val isSpeechDetected: Boolean get() = this == SPEECH_DETECTED
+    val isRecording: Boolean get() = this == RECORDING
+    val isPossibleEnd: Boolean get() = this == POSSIBLE_END
+    val isFinalizing: Boolean get() = this == FINALIZING
+    val isTranscribing: Boolean get() = this == TRANSCRIBING
+    val isTransmitting: Boolean get() = this == TRANSMITTING
+    val isActive: Boolean get() = this != IDLE
+}
+
 // ============================================================================
 // 3. MULTILINGUAL SUPPORT (10 SIH TARGET LANGUAGES)
 // ============================================================================
@@ -358,6 +379,7 @@ data class AppState(
     val connectedDeviceAddress: String? = null,
     val pttState: PttState = PttState.IDLE,
     val transceiverState: TransceiverState = TransceiverState.IDLE,
+    val continuousModeState: ContinuousModeState = ContinuousModeState.IDLE,
     val isPttPressed: Boolean = false,
     val isPttLocked: Boolean = false,
     val transmissionMode: TransmissionMode = TransmissionMode.PUSH_TO_TALK,
@@ -381,6 +403,10 @@ data class AppState(
     fun withTransceiverState(newState: TransceiverState): AppState = copy(
         transceiverState = newState,
         pttState = newState.toPttState()
+    )
+
+    fun withContinuousModeState(newState: ContinuousModeState): AppState = copy(
+        continuousModeState = newState
     )
 
     companion object {

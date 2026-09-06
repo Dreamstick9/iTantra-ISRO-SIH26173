@@ -14,16 +14,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -158,31 +157,196 @@ fun MainScreen(
             VerticalSliceHUD(
                 transceiverState = state.transceiverState,
                 timestamps = state.verticalSliceTimestamps,
-                metrics = state.lastLatencyMetrics
+                metrics = state.lastLatencyMetrics,
+                continuousState = state.continuousModeState,
+                transmissionMode = state.transmissionMode
             )
 
-            // 2. Tactile Push-To-Talk Button (Single button interaction reflecting 6 states)
-            PttButton(
-                transceiverState = state.transceiverState,
-                pttState = state.pttState,
-                isLocked = state.isPttLocked,
-                isEmergency = state.emergencyAlert.isActive,
-                onPressStart = {
-                    if (!hasRecordAudioPermission) {
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else {
-                        viewModel.onPttPressed()
+            // Mode Selector: Push-To-Talk vs Continuous Hands-Free (Silero VAD)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = state.transmissionMode == com.example.itantra.data.TransmissionMode.PUSH_TO_TALK,
+                        onClick = { viewModel.onTransmissionModeChanged(com.example.itantra.data.TransmissionMode.PUSH_TO_TALK) },
+                        label = {
+                            Text(
+                                "Push-To-Talk",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = state.transmissionMode == com.example.itantra.data.TransmissionMode.CONTINUOUS,
+                        onClick = { viewModel.onTransmissionModeChanged(com.example.itantra.data.TransmissionMode.CONTINUOUS) },
+                        label = {
+                            Text(
+                                "Continuous VAD",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.Hearing, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            // 2. Active Interaction Area
+            if (state.transmissionMode == com.example.itantra.data.TransmissionMode.PUSH_TO_TALK) {
+                // Tactile Push-To-Talk Button (Single button interaction reflecting 6 states)
+                PttButton(
+                    transceiverState = state.transceiverState,
+                    pttState = state.pttState,
+                    isLocked = state.isPttLocked,
+                    isEmergency = state.emergencyAlert.isActive,
+                    onPressStart = {
+                        if (!hasRecordAudioPermission) {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            viewModel.onPttPressed()
+                        }
+                    },
+                    onPressEnd = { viewModel.onPttReleased() },
+                    onLockToggle = {
+                        if (!hasRecordAudioPermission) {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            viewModel.onPttLockToggled()
+                        }
                     }
-                },
-                onPressEnd = { viewModel.onPttReleased() },
-                onLockToggle = {
-                    if (!hasRecordAudioPermission) {
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else {
-                        viewModel.onPttLockToggled()
+                )
+            } else {
+                // Continuous Hands-Free VAD Mode Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GraphicEq,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "SILERO VAD HANDS-FREE",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            AssistChip(
+                                onClick = {},
+                                label = {
+                                    Text(
+                                        text = state.continuousModeState.name,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = when (state.continuousModeState) {
+                                        com.example.itantra.data.ContinuousModeState.IDLE -> MaterialTheme.colorScheme.surface
+                                        com.example.itantra.data.ContinuousModeState.LISTENING -> Color(0xFF00B0FF).copy(alpha = 0.2f)
+                                        com.example.itantra.data.ContinuousModeState.SPEECH_DETECTED -> Color(0xFFFFD600).copy(alpha = 0.2f)
+                                        com.example.itantra.data.ContinuousModeState.RECORDING -> Color(0xFFFF1744).copy(alpha = 0.2f)
+                                        com.example.itantra.data.ContinuousModeState.POSSIBLE_END -> Color(0xFFFF9100).copy(alpha = 0.2f)
+                                        com.example.itantra.data.ContinuousModeState.FINALIZING -> Color(0xFFE040FB).copy(alpha = 0.2f)
+                                        com.example.itantra.data.ContinuousModeState.TRANSCRIBING -> Color(0xFFFFB300).copy(alpha = 0.2f)
+                                        com.example.itantra.data.ContinuousModeState.TRANSMITTING -> Color(0xFF00E5FF).copy(alpha = 0.2f)
+                                    }
+                                )
+                            )
+                        }
+
+                        Text(
+                            text = if (state.continuousModeState.isIdle) {
+                                "Hands-free continuous mode is idle. Tap below to begin voice-activated streaming."
+                            } else {
+                                "Microphone streaming into Silero VAD. Utterance boundaries and silences are automatically segmented."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Button(
+                            onClick = {
+                                if (!hasRecordAudioPermission) {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                } else {
+                                    viewModel.onToggleContinuousMode()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (state.continuousModeState.isIdle) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    Color(0xFFFF1744)
+                                }
+                            )
+                        ) {
+                            Icon(
+                                imageVector = if (state.continuousModeState.isIdle) Icons.Default.Hearing else Icons.Default.HearingDisabled,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (state.continuousModeState.isIdle) {
+                                    "START HANDS-FREE LISTENING"
+                                } else {
+                                    "STOP HANDS-FREE LISTENING"
+                                },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
                 }
-            )
+            }
 
             // 3. Conversation History & Transcript Log
             ReceivedMessagesArea(
