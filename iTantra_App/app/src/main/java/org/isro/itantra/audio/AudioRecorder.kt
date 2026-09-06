@@ -6,17 +6,28 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Process
 import android.util.Log
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Low-latency 16 kHz Mono 16-bit PCM Audio Recorder.
- * Manages AudioRecord on Dispatchers.IO with real-time thread priority.
+ * Tuned for downstream Neural ASR models (AI4Bharat IndicConformer, sherpa-onnx, Vosk, Silero VAD).
+ *
+ * Key Architectural Highlights:
+ * - Dedicated single-thread audio dispatcher (Process.THREAD_PRIORITY_URGENT_AUDIO -19)
+ * - MediaRecorder.AudioSource.VOICE_RECOGNITION for full 16 kHz spectral fidelity
+ * - Anti-overrun circular buffer sizing: maxOf(minBufSize * 2, frameSizeBytes * 4)
+ * - Thread-safe teardown preventing native JNI crashes
  */
 class AudioRecorder(
     private val onAmplitudeChanged: ((Float) -> Unit)? = null,
@@ -26,66 +37,88 @@ class AudioRecorder(
         private const val TAG = "AudioRecorder"
     }
 
-    private var audioRecord: AudioRecord? = null
+    private val audioExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "iTantra-AudioRecord-Urgent").apply {
+            priority = Thread.MAX_PRIORITY
+            isDaemon = true
+        }
+    }
+    private val audioDispatcher = audioExecutor.asCoroutineDispatcher()
+
+    private val isRecordingActive = AtomicBoolean(false)
+    val isRecording: Boolean
+        get() = isRecordingActive.get()
+
+    private val currentAudioRecord = AtomicReference<AudioRecord?>(null)
     private var recordingJob: Job? = null
     private val recordedDataStream = ByteArrayOutputStream()
 
-    @Volatile
-    var isRecording: Boolean = false
-        private set
-
     @SuppressLint("MissingPermission")
+    @Synchronized
     fun startRecording(
         scope: CoroutineScope,
         onAudioChunk: ((ByteArray, Int) -> Unit)? = null
     ): Boolean {
-        if (isRecording) return false
-
-        val minBufSize = AudioRecord.getMinBufferSize(
-            AudioConfig.SAMPLE_RATE,
-            AudioConfig.CHANNEL_IN,
-            AudioConfig.AUDIO_ENCODING
-        )
-        if (minBufSize <= 0) {
-            Log.e(TAG, "AudioRecord parameter error: minBufferSize = $minBufSize")
+        if (isRecordingActive.get()) {
+            Log.w(TAG, "AudioRecorder is already recording.")
             return false
         }
 
-        val internalBufferSize = maxOf(minBufSize * 2, AudioConfig.FRAME_SIZE_BYTES * 4)
+        val minBufSize = AudioRecord.getMinBufferSize(
+            AudioConfig.SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
 
-        val audioFormat = AudioFormat.Builder()
-            .setEncoding(AudioConfig.AUDIO_ENCODING)
+        if (minBufSize <= 0) {
+            Log.e(TAG, "AudioRecord parameter error: minBufSize = $minBufSize")
+            return false
+        }
+
+        // 20 ms frame = 640 bytes. Allocate at least 4 frames or 2x minBufSize for headroom
+        val frameSizeBytes = AudioConfig.FRAME_SIZE_BYTES
+        val internalBufferSize = maxOf(minBufSize * 2, frameSizeBytes * 4)
+
+        val format = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setSampleRate(AudioConfig.SAMPLE_RATE)
-            .setChannelMask(AudioConfig.CHANNEL_IN)
+            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .build()
 
-        val record = AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.MIC)
-            .setAudioFormat(audioFormat)
-            .setBufferSizeInBytes(internalBufferSize)
-            .build()
+        val record = try {
+            AudioRecord.Builder()
+                .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(internalBufferSize)
+                .build()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to instantiate AudioRecord", e)
+            return false
+        }
 
         if (record.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "Failed to initialize AudioRecord")
+            Log.e(TAG, "AudioRecord failed to initialize (state != STATE_INITIALIZED)")
             record.release()
             return false
         }
 
-        audioRecord = record
-        recordedDataStream.reset()
-        isRecording = true
+        currentAudioRecord.set(record)
+        isRecordingActive.set(true)
 
-        recordingJob = scope.launch(Dispatchers.IO) {
-            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+        synchronized(recordedDataStream) {
+            recordedDataStream.reset()
+        }
+
+        recordingJob = scope.launch(audioDispatcher + CoroutineName("AudioRecordJob")) {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            val buffer = ByteArray(frameSizeBytes)
+            var isFirstFrame = true
+
             try {
                 record.startRecording()
-                Log.d(TAG, "AudioRecord started recording with source=MIC, sampleRate=${AudioConfig.SAMPLE_RATE}")
+                Log.d(TAG, "AudioRecord hardware started successfully [16kHz Mono 16-bit]")
 
-                val buffer = ByteArray(AudioConfig.FRAME_SIZE_BYTES)
-                var isFirstFrame = true
-                var chunkCount = 0
-
-                while (isActive && isRecording) {
+                while (isActive && isRecordingActive.get()) {
                     val bytesRead = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
 
                     if (bytesRead > 0) {
@@ -95,23 +128,14 @@ class AudioRecorder(
                         }
 
                         // Accumulate for loopback playback
-                        recordedDataStream.write(buffer, 0, bytesRead)
+                        synchronized(recordedDataStream) {
+                            recordedDataStream.write(buffer, 0, bytesRead)
+                        }
 
-                        // Compute RMS amplitude for UI visualization
+                        // Compute in-place RMS amplitude for UI visualization
                         val rms = AudioUtils.calculateRmsFromPcm16(buffer, 0, bytesRead)
                         val level = AudioUtils.calculateVisualizerLevel(rms)
                         onAmplitudeChanged?.invoke(level)
-
-                        var peak = 0
-                        for (i in 0 until bytesRead step 2) {
-                            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort().toInt()
-                            val absS = kotlin.math.abs(sample)
-                            if (absS > peak) peak = absS
-                        }
-
-                        if (chunkCount++ % 10 == 0 || peak > 100) {
-                            Log.d(TAG, "PCM chunk #$chunkCount: bytesRead=$bytesRead, peak=$peak, rms=$rms, level=$level")
-                        }
 
                         // Emit chunk to optional subscriber
                         onAudioChunk?.invoke(buffer.copyOf(bytesRead), bytesRead)
@@ -120,39 +144,58 @@ class AudioRecorder(
                         break
                     }
                 }
+            } catch (c: CancellationException) {
+                Log.d(TAG, "AudioRecord job cancelled cleanly.")
             } catch (e: Exception) {
                 Log.e(TAG, "Exception in AudioRecord loop", e)
             } finally {
-                withContext(kotlinx.coroutines.NonCancellable) {
-                    releaseRecord()
-                }
+                teardownRecord(record)
             }
         }
         return true
     }
 
     fun stopRecording(): ByteArray {
-        isRecording = false
-        recordingJob?.cancel()
-        recordingJob = null
-        releaseRecord()
-        return recordedDataStream.toByteArray()
-    }
+        if (!isRecordingActive.getAndSet(false)) {
+            return synchronized(recordedDataStream) { recordedDataStream.toByteArray() }
+        }
 
-    private fun releaseRecord() {
-        try {
-            audioRecord?.let { record ->
+        currentAudioRecord.get()?.let { record ->
+            try {
                 if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     record.stop()
                 }
-                record.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping AudioRecord", e)
             }
+        }
+
+        recordingJob?.cancel()
+        recordingJob = null
+
+        return synchronized(recordedDataStream) {
+            recordedDataStream.toByteArray()
+        }
+    }
+
+    private fun teardownRecord(record: AudioRecord) {
+        try {
+            if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                record.stop()
+            }
+            record.release()
+            Log.d(TAG, "AudioRecord hardware released safely.")
         } catch (e: Exception) {
             Log.w(TAG, "Error releasing AudioRecord", e)
         } finally {
-            audioRecord = null
-            isRecording = false
+            currentAudioRecord.set(null)
+            isRecordingActive.set(false)
             onAmplitudeChanged?.invoke(0.0f)
         }
+    }
+
+    fun destroy() {
+        stopRecording()
+        audioExecutor.shutdown()
     }
 }

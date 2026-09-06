@@ -2,6 +2,7 @@ package org.isro.itantra.audio
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -22,6 +23,12 @@ class AudioUtilsTest {
         assertEquals('F'.code.toByte(), header[2])
         assertEquals('F'.code.toByte(), header[3])
 
+        // Check ChunkSize (32000 + 36 = 32036 = 0x00007D24 -> LE: 0x24, 0x7D, 0x00, 0x00)
+        assertEquals(0x24.toByte(), header[4])
+        assertEquals(0x7D.toByte(), header[5])
+        assertEquals(0x00.toByte(), header[6])
+        assertEquals(0x00.toByte(), header[7])
+
         // Check WAVE marker
         assertEquals('W'.code.toByte(), header[8])
         assertEquals('A'.code.toByte(), header[9])
@@ -39,37 +46,79 @@ class AudioUtilsTest {
         assertEquals(0x7D.toByte(), header[29])
         assertEquals(0x00.toByte(), header[30])
         assertEquals(0x00.toByte(), header[31])
+
+        // Check Block Align at offset 32 (2 bytes = 0x0002 -> LE: 0x02, 0x00)
+        assertEquals(0x02.toByte(), header[32])
+        assertEquals(0x00.toByte(), header[33])
+
+        // Check Bits Per Sample at offset 34 (16 bits = 0x0010 -> LE: 0x10, 0x00)
+        assertEquals(0x10.toByte(), header[34])
+        assertEquals(0x00.toByte(), header[35])
+    }
+
+    @Test
+    fun testWavHeaderParsing() {
+        val pcmLength = 64000 // 2 seconds
+        val header = AudioUtils.generateWavHeader(pcmLength)
+        val meta = AudioUtils.parseWavHeader(header)
+
+        assertNotNull(meta)
+        assertEquals(16000, meta!!.sampleRate)
+        assertEquals(1, meta.channelCount)
+        assertEquals(16, meta.bitsPerSample)
+        assertEquals(32000, meta.byteRate)
+        assertEquals(2, meta.blockAlign)
+        assertEquals(64000, meta.pcmByteLength)
+        assertEquals(2000L, meta.durationMs)
+        assertEquals(2.0, meta.durationSeconds, 1e-6)
     }
 
     @Test
     fun testPcmToWavPackaging() {
-        val pcmData = ByteArray(640) { 0 }
+        val pcmData = ByteArray(640) { 0x42.toByte() }
         val wav = AudioUtils.pcmToWav(pcmData)
 
         assertEquals(44 + 640, wav.size)
         assertTrue(AudioUtils.isValidWavHeader(wav))
+
+        // Ensure payload is intact
+        for (i in 0 until 640) {
+            assertEquals(0x42.toByte(), wav[44 + i])
+        }
     }
 
     @Test
-    fun testInvalidWavHeaderRejection() {
+    fun testCorruptedHeaderValidation() {
         val corruptedHeader = ByteArray(44) { 0 }
         assertFalse(AudioUtils.isValidWavHeader(corruptedHeader))
+
+        val shortHeader = ByteArray(40)
+        assertFalse(AudioUtils.isValidWavHeader(shortHeader))
     }
 
     @Test
-    fun testPcmToFloatNormalization() {
-        // Test +32767, -32768, and 0
-        val pcmBytes = byteArrayOf(
-            0xFF.toByte(), 0x7F.toByte(), // +32767
-            0x00.toByte(), 0x80.toByte(), // -32768
-            0x00.toByte(), 0x00.toByte()  // 0
+    fun testExactShortFloatShortRoundTrip() {
+        val testShorts = shortArrayOf(
+            Short.MIN_VALUE,
+            (-16384).toShort(),
+            (-1).toShort(),
+            0.toShort(),
+            1.toShort(),
+            16384.toShort(),
+            Short.MAX_VALUE
         )
 
-        val floats = AudioUtils.pcm16ToFloats(pcmBytes)
-        assertEquals(3, floats.size)
-        assertTrue("Max positive sample should normalize near +1.0f", abs(floats[0] - 0.9999695f) < 1e-4)
-        assertEquals("Max negative sample should normalize to -1.0f", -1.0f, floats[1], 1e-6f)
-        assertEquals("Zero sample should normalize to 0.0f", 0.0f, floats[2], 1e-6f)
+        val floats = AudioUtils.shortsToFloats(testShorts)
+        assertEquals(-1.0f, floats[0], 1e-7f)
+        assertEquals(-0.5f, floats[1], 1e-7f)
+        assertEquals(0.0f, floats[3], 1e-7f)
+        assertEquals(0.5f, floats[5], 1e-7f)
+        assertTrue("Max short must normalize to 32767/32768", abs(floats[6] - 0.9999695f) < 1e-6f)
+
+        val restoredShorts = AudioUtils.floatsToShorts(floats)
+        for (i in testShorts.indices) {
+            assertEquals("Round-trip mismatch at index $i", testShorts[i], restoredShorts[i])
+        }
     }
 
     @Test
@@ -82,6 +131,18 @@ class AudioUtilsTest {
         for (i in originalFloats.indices) {
             assertTrue("Sample $i roundtrip drift should be under 0.001", abs(originalFloats[i] - convertedBack[i]) < 1e-3)
         }
+    }
+
+    @Test
+    fun testFloatClippingAndNaNSanitization() {
+        val dirtyFloats = floatArrayOf(2.5f, -3.0f, Float.NaN, 0.0f)
+        val pcmBytes = AudioUtils.floatsToPcm16(dirtyFloats)
+        val restoredShorts = AudioUtils.pcm16ToShorts(pcmBytes)
+
+        assertEquals("Positive saturation must clamp to +32767", 32767.toShort(), restoredShorts[0])
+        assertEquals("Negative saturation must clamp to -32768", (-32768).toShort(), restoredShorts[1])
+        assertEquals("NaN must be safely sanitized to 0", 0.toShort(), restoredShorts[2])
+        assertEquals("Zero must remain 0", 0.toShort(), restoredShorts[3])
     }
 
     @Test

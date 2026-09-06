@@ -1,6 +1,7 @@
 package org.isro.itantra.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -9,6 +10,7 @@ import kotlinx.coroutines.launch
 import org.isro.itantra.audio.AudioConfig
 import org.isro.itantra.audio.AudioPlayer
 import org.isro.itantra.audio.AudioRecorder
+import org.isro.itantra.stt.SttEngine
 import org.isro.itantra.telemetry.LatencyTracker
 import org.isro.itantra.telemetry.TelemetryStats
 import org.isro.itantra.telemetry.TransceiverMode
@@ -22,7 +24,7 @@ enum class PttState {
     PLAYING
 }
 
-class MainViewModel : ViewModel() {
+class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val latencyTracker = LatencyTracker()
     val telemetryStats: StateFlow<TelemetryStats> = latencyTracker.stats
@@ -39,6 +41,14 @@ class MainViewModel : ViewModel() {
     private val _hasRecordedAudio = MutableStateFlow(false)
     val hasRecordedAudio = _hasRecordedAudio.asStateFlow()
 
+    // --- Milestone 3: On-Device Speech-to-Text (STT) & Sender Visibility ---
+    private val sttEngine = SttEngine(application.applicationContext)
+    val isTranscribing: StateFlow<Boolean> = sttEngine.isListening
+    val sttStatusMessage: StateFlow<String> = sttEngine.statusMessage
+
+    private val _outgoingText = MutableStateFlow("")
+    val outgoingText = _outgoingText.asStateFlow()
+
     // --- Milestone 2: Neural TTS State ---
     private val ttsEngine = TtsEngine()
 
@@ -53,6 +63,17 @@ class MainViewModel : ViewModel() {
 
     private val _isPlayingTts = MutableStateFlow(false)
     val isPlayingTts = _isPlayingTts.asStateFlow()
+
+    init {
+        // Automatically sync live partial STT transcription into outgoingText
+        viewModelScope.launch {
+            sttEngine.livePartialText.collect { partial ->
+                if (partial.isNotEmpty()) {
+                    _outgoingText.value = partial
+                }
+            }
+        }
+    }
 
     private val audioRecorder = AudioRecorder(
         onAmplitudeChanged = { level ->
@@ -79,7 +100,7 @@ class MainViewModel : ViewModel() {
     )
 
     // -------------------------------------------------------------
-    // MILESTONE 1: Push-To-Talk Audio Actions
+    // MILESTONE 1 & 3: Push-To-Talk Audio & Real-time STT Actions
     // -------------------------------------------------------------
 
     fun toggleRecording() {
@@ -95,6 +116,10 @@ class MainViewModel : ViewModel() {
 
         latencyTracker.setMode(TransceiverMode.TRANSMITTER)
         latencyTracker.onPttPressed()
+
+        // Start real-time speech recognition
+        sttEngine.startListening(_selectedLanguage.value)
+
         val started = audioRecorder.startRecording(viewModelScope)
         if (started) {
             _pttState.value = PttState.RECORDING
@@ -105,13 +130,23 @@ class MainViewModel : ViewModel() {
         if (_pttState.value != PttState.RECORDING) return
 
         val pcmData = audioRecorder.stopRecording()
+        val transcribed = sttEngine.stopListening()
         _amplitude.value = 0.0f
+
+        if (transcribed.isNotEmpty()) {
+            _outgoingText.value = transcribed
+            _ttsInputText.value = transcribed
+        }
 
         if (pcmData.isNotEmpty()) {
             _lastRecordedPcm.value = pcmData
             _hasRecordedAudio.value = true
             val durationMs = AudioConfig.bytesToDurationMs(pcmData.size.toLong())
-            latencyTracker.onPttReleased(pcmData.size.toLong(), durationMs)
+            latencyTracker.onPttReleased(
+                totalBytes = pcmData.size.toLong(),
+                durationMs = durationMs,
+                bufferSizeBytes = pcmData.size.toLong()
+            )
 
             // Playback what was recorded
             playAudio(pcmData)
@@ -123,9 +158,21 @@ class MainViewModel : ViewModel() {
     fun onPttCancel() {
         if (_pttState.value == PttState.RECORDING) {
             audioRecorder.stopRecording()
+            sttEngine.stopListening()
             _amplitude.value = 0.0f
             _pttState.value = PttState.IDLE
         }
+    }
+
+    fun updateOutgoingText(text: String) {
+        _outgoingText.value = text
+        _ttsInputText.value = text
+        sttEngine.setTranscribedText(text)
+    }
+
+    fun clearOutgoingText() {
+        _outgoingText.value = ""
+        sttEngine.clear()
     }
 
     fun replayLastAudio() {
@@ -151,11 +198,21 @@ class MainViewModel : ViewModel() {
 
     fun updateInputText(text: String) {
         _ttsInputText.value = text
+        _outgoingText.value = text
     }
 
     fun selectEmergencyPreset(preset: EmergencyPreset) {
         val langText = preset.getTextFor(_selectedLanguage.value)
         _ttsInputText.value = langText
+        _outgoingText.value = langText
+    }
+
+    fun synthesizeOutgoingText(isEmergency: Boolean = false) {
+        val text = _outgoingText.value.trim()
+        if (text.isNotEmpty()) {
+            _ttsInputText.value = text
+            synthesizeAndSpeak(isEmergency)
+        }
     }
 
     fun synthesizeAndSpeak(isEmergency: Boolean = false) {
@@ -217,7 +274,8 @@ class MainViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        audioRecorder.stopRecording()
+        audioRecorder.destroy()
         audioPlayer.stop()
+        sttEngine.destroy()
     }
 }

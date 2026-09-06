@@ -61,6 +61,7 @@ import androidx.core.content.ContextCompat
 import org.isro.itantra.ui.MainViewModel
 import org.isro.itantra.ui.PttState
 import org.isro.itantra.ui.components.AmplitudeVisualizer
+import org.isro.itantra.ui.components.OutgoingTransmissionCard
 import org.isro.itantra.ui.components.PttButton
 import org.isro.itantra.ui.components.TelemetryCard
 import org.isro.itantra.ui.components.TtsControlCard
@@ -102,6 +103,11 @@ fun MainScreen(viewModel: MainViewModel) {
     val amplitude by viewModel.amplitude.collectAsState()
     val stats by viewModel.telemetryStats.collectAsState()
     val hasAudio by viewModel.hasRecordedAudio.collectAsState()
+
+    // Milestone 3 STT & Outgoing Transmission States
+    val outgoingText by viewModel.outgoingText.collectAsState()
+    val isTranscribing by viewModel.isTranscribing.collectAsState()
+    val sttStatusMessage by viewModel.sttStatusMessage.collectAsState()
 
     // Milestone 2 TTS States
     val selectedLanguage by viewModel.selectedLanguage.collectAsState()
@@ -160,6 +166,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 ) {
                     StatusBadge(text = "M1: MIC I/O", color = Color(0xFF38BDF8))
                     StatusBadge(text = "M2: OFFLINE TTS", color = Color(0xFF4ADE80))
+                    StatusBadge(text = "M3: OFFLINE STT", color = Color(0xFFA78BFA))
                     StatusBadge(text = "ZERO CLOUD", color = Color(0xFFFBBF24))
                 }
             }
@@ -214,7 +221,7 @@ fun MainScreen(viewModel: MainViewModel) {
 
             // Tab Content
             if (selectedTabIndex == 0) {
-                // --- TAB 1: PTT TRANSCEIVER (MILESTONE 1) ---
+                // --- TAB 1: PTT TRANSCEIVER (MILESTONE 1 & 3) ---
                 if (!hasRecordPermission) {
                     PermissionCard(
                         onRequestPermission = {
@@ -223,12 +230,14 @@ fun MainScreen(viewModel: MainViewModel) {
                     )
                 } else {
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
                             text = when (pttState) {
-                                PttState.RECORDING -> "LIVE MICROPHONE INPUT (RECORDING)"
+                                PttState.RECORDING -> "LIVE MICROPHONE INPUT (RECORDING & TRANSCRIBING)"
                                 PttState.PLAYING -> "AUDIO PLAYBACK IN PROGRESS"
                                 PttState.IDLE -> "AUDIO ENGINE READY (MIC ACTIVE)"
                             },
@@ -318,6 +327,22 @@ fun MainScreen(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // --- SENDER OUTGOING TRANSMISSION HUB (WHAT SENDER IS SENDING) ---
+                        OutgoingTransmissionCard(
+                            text = outgoingText,
+                            isTranscribing = isTranscribing,
+                            statusMessage = sttStatusMessage,
+                            selectedLanguage = selectedLanguage,
+                            onTextChanged = { viewModel.updateOutgoingText(it) },
+                            onLanguageSelected = { viewModel.selectLanguage(it) },
+                            onSynthesizeAndSpeak = { isEmergency -> viewModel.synthesizeOutgoingText(isEmergency) },
+                            onClear = { viewModel.clearOutgoingText() }
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
             } else {
