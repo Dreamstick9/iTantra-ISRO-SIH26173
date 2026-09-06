@@ -1,0 +1,83 @@
+package com.example.itantra.audio
+
+import com.example.itantra.util.Logger
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicBoolean
+
+class MockAudioEngine : AudioEngine {
+    private val TAG = "MockAudio"
+
+    private val _audioLevel = MutableStateFlow(0f)
+    override val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
+
+    private val _isRecording = AtomicBoolean(false)
+    override val isRecording: Boolean get() = _isRecording.get()
+
+    private val _isPlaying = AtomicBoolean(false)
+    override val isPlaying: Boolean get() = _isPlaying.get()
+
+    var lastPlayedAudio: ByteArray? = null
+        private set
+    var lastPlayedWasEmergency: Boolean = false
+        private set
+    var recordingStartTimestamp: Long = 0L
+        private set
+
+    override fun initialize(): Result<Unit> {
+        Logger.i(TAG, "Initialized MockAudioEngine (16kHz Mono 16-bit PCM).")
+        return Result.success(Unit)
+    }
+
+    override fun startRecording(): Result<Unit> {
+        if (_isRecording.compareAndSet(false, true)) {
+            recordingStartTimestamp = System.currentTimeMillis()
+            _audioLevel.value = 0.72f
+            Logger.d(TAG, "Audio capture started.")
+            return Result.success(Unit)
+        }
+        return Result.success(Unit)
+    }
+
+    override fun stopRecording(): ByteArray {
+        return if (_isRecording.compareAndSet(true, false)) {
+            _audioLevel.value = 0f
+            val durationMs = (System.currentTimeMillis() - recordingStartTimestamp).coerceAtLeast(100L)
+            val sampleCount = ((durationMs * AudioConfig.SAMPLE_RATE_HZ) / 1000L).toInt()
+            val pcmBytes = ByteArray(sampleCount * AudioConfig.BYTES_PER_SAMPLE) { (it % 127).toByte() }
+            Logger.d(TAG, "Audio capture stopped. Captured ${pcmBytes.size} bytes ($durationMs ms).")
+            pcmBytes
+        } else {
+            ByteArray(0)
+        }
+    }
+
+    override fun playAudio(pcmData: ByteArray, sampleRate: Int, isEmergency: Boolean): Result<Unit> {
+        lastPlayedAudio = pcmData
+        lastPlayedWasEmergency = isEmergency
+        _isPlaying.set(true)
+        if (isEmergency) {
+            Logger.w(TAG, "EMERGENCY AUDIO PLAYBACK TRIGGERED at max volume (${pcmData.size} bytes).")
+        } else {
+            Logger.d(TAG, "Standard audio playback started (${pcmData.size} bytes).")
+        }
+        return Result.success(Unit)
+    }
+
+    override fun stopPlayback() {
+        if (_isPlaying.compareAndSet(true, false)) {
+            Logger.d(TAG, "Audio playback stopped.")
+        }
+    }
+
+    override fun release() {
+        stopRecording()
+        stopPlayback()
+        Logger.i(TAG, "MockAudioEngine released.")
+    }
+
+    fun setSimulatedAudioLevel(level: Float) {
+        _audioLevel.value = level.coerceIn(0f, 1f)
+    }
+}
