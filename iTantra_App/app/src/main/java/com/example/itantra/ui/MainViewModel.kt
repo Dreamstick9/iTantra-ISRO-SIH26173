@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -98,6 +99,33 @@ class MainViewModel(
         viewModelScope.launch(ioDispatcher) {
             transportEngine.incomingMessages.collect { message ->
                 handleIncomingMessage(message)
+            }
+        }
+
+        // Observe speech engine model load state and errors for STT diagnostics
+        viewModelScope.launch(ioDispatcher) {
+            combine(speechEngine.isModelLoaded, speechEngine.loadErrorMessage) { loaded, errorMsg ->
+                Pair(loaded, errorMsg)
+            }.collect { (loaded, errorMsg) ->
+                _appState.update { state ->
+                    val sttState = when {
+                        loaded -> SubsystemState.READY
+                        errorMsg != null -> SubsystemState.ERROR
+                        else -> SubsystemState.INITIALIZING
+                    }
+                    state.copy(
+                        subsystems = state.subsystems.copy(
+                            stt = sttState,
+                            sttErrorMessage = errorMsg
+                        ),
+                        sttDiagnostics = state.sttDiagnostics.copy(
+                            isModelLoaded = loaded,
+                            isOffline = true,
+                            language = "English",
+                            errorMessage = errorMsg
+                        )
+                    )
+                }
             }
         }
     }
@@ -195,14 +223,67 @@ class MainViewModel(
                     timestamp = System.currentTimeMillis()
                 )
 
-                Logger.i(TAG, "Audio captured successfully: ${pcmAudio.size} bytes ($durationMs ms).")
+                Logger.i(TAG, "Audio captured successfully: ${pcmAudio.size} bytes ($durationMs ms). Transcribing via speech engine...")
 
-                _appState.update {
-                    it.copy(
+                // Measure latency and transcribe PCM audio via speechEngine
+                val startTime = System.currentTimeMillis()
+                var recognizedText = ""
+                var sttError: String? = null
+                try {
+                    recognizedText = speechEngine.transcribe(pcmAudio)
+                } catch (e: Exception) {
+                    Logger.e(TAG, "STT transcription error: ${e.message}", e)
+                    sttError = e.message ?: "STT transcription error"
+                }
+                val processingTimeMs = System.currentTimeMillis() - startTime
+
+                Logger.i(TAG, "Transcribed in ${processingTimeMs}ms: '$recognizedText'")
+
+                _appState.update { state ->
+                    val newDiagnostics = state.sttDiagnostics.copy(
+                        isModelLoaded = speechEngine.isModelLoaded.value,
+                        isOffline = true,
+                        language = "English",
+                        processingTimeMs = processingTimeMs,
+                        recognizedText = recognizedText,
+                        errorMessage = sttError
+                    )
+
+                    val updatedMessages = if (recognizedText.isNotBlank()) {
+                        val outgoingMessage = ReceivedMessage(
+                            id = UUID.randomUUID().toString(),
+                            senderId = "LOCAL_USER",
+                            senderName = "Local Operator (You)",
+                            text = recognizedText,
+                            originalLanguage = Language.ENGLISH,
+                            targetLanguage = state.outputLanguage,
+                            timestamp = System.currentTimeMillis(),
+                            messageType = if (state.emergencyAlert.isActive) MessageType.EMERGENCY_ALERT else MessageType.VOICE_NOTE,
+                            isEmergency = state.emergencyAlert.isActive,
+                            rawUtf8ByteSize = recognizedText.toByteArray(Charsets.UTF_8).size,
+                            compressedByteSize = (recognizedText.length * 0.75).toInt().coerceAtLeast(1),
+                            isOutgoing = true
+                        )
+                        listOf(outgoingMessage) + state.messages
+                    } else {
+                        state.messages
+                    }
+
+                    val updatedStatus = if (sttError != null) {
+                        "Audio captured successfully (${pcmAudio.size} bytes). STT Error: $sttError"
+                    } else if (recognizedText.isNotBlank()) {
+                        "Audio captured successfully (${pcmAudio.size} bytes, ${durationMs}ms) | STT: \"$recognizedText\" (${processingTimeMs}ms)"
+                    } else {
+                        "Audio captured successfully (${pcmAudio.size} bytes, ${durationMs}ms)"
+                    }
+
+                    state.copy(
                         pttState = PttState.IDLE,
                         lastAudioDebugInfo = debugInfo,
-                        statusMessage = "Audio captured successfully (${pcmAudio.size} bytes, ${durationMs}ms)",
-                        errorMessage = null
+                        sttDiagnostics = newDiagnostics,
+                        messages = updatedMessages,
+                        statusMessage = updatedStatus,
+                        errorMessage = sttError
                     )
                 }
             } catch (e: Exception) {

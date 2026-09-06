@@ -127,4 +127,38 @@ class MainViewModelTest {
         assertEquals("Test satellite advisory", state.messages[0].text)
         assertNotNull(audioEngine.lastPlayedAudio)
     }
+
+    @Test
+    fun testSttDiagnosticsFlowOnPttRelease() = runTest(testDispatcher) {
+        advanceUntilIdle() // let init coroutines collect speechEngine state
+
+        val initialDiag = viewModel.appState.value.sttDiagnostics
+        assertTrue(initialDiag.isModelLoaded)
+        assertTrue(initialDiag.isOffline)
+        assertEquals("English", initialDiag.language)
+        assertEquals("", initialDiag.recognizedText)
+        assertNull(initialDiag.errorMessage)
+
+        viewModel.onPttPressed()
+        advanceUntilIdle()
+
+        viewModel.onPttReleased()
+        advanceUntilIdle()
+
+        val finalState = viewModel.appState.value
+        val finalDiag = finalState.sttDiagnostics
+
+        assertTrue(finalDiag.isModelLoaded)
+        assertTrue(finalDiag.isOffline)
+        assertEquals("English", finalDiag.language)
+        assertTrue(finalDiag.recognizedText.isNotBlank())
+        assertNull(finalDiag.errorMessage)
+
+        // Verify that the recognized text was added to conversation messages
+        assertEquals(1, finalState.messages.size)
+        val outgoingMsg = finalState.messages[0]
+        assertTrue(outgoingMsg.isOutgoing)
+        assertEquals(finalDiag.recognizedText, outgoingMsg.text)
+        assertEquals(Language.ENGLISH, outgoingMsg.originalLanguage)
+    }
 }

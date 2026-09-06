@@ -93,7 +93,12 @@ fun MainScreen(
                 }
             )
 
-            // 2. Push-To-Talk Button (Stage 1 Core Interaction)
+            // 2. Offline English STT Diagnostic Card (Stage 2 Speech Engine HUD)
+            SttDiagnosticCard(
+                diagnosticState = state.sttDiagnostics
+            )
+
+            // 3. Push-To-Talk Button (Stage 1 Core Interaction)
             PttButton(
                 pttState = state.pttState,
                 isLocked = state.isPttLocked,
@@ -113,6 +118,13 @@ fun MainScreen(
                         viewModel.onPttLockToggled()
                     }
                 }
+            )
+
+            // 4. Conversation History & Transcript Log
+            ReceivedMessagesArea(
+                messages = state.messages,
+                onPlayAudio = { viewModel.onPlayMessageAudio(it) },
+                onSimulateReceive = { viewModel.simulateReceiveMessage() }
             )
 
             // 3. Subsystem Health Indicators

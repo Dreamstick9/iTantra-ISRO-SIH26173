@@ -221,6 +221,15 @@ data class AudioDebugInfo(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+data class SttDiagnosticState(
+    val isModelLoaded: Boolean = false,
+    val isOffline: Boolean = true,
+    val language: String = "English",
+    val processingTimeMs: Long = 0L,
+    val recognizedText: String = "",
+    val errorMessage: String? = null
+)
+
 data class AppState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val transportType: TransportType = TransportType.NONE,
@@ -233,6 +242,7 @@ data class AppState(
     val inputLanguage: Language = Language.DEFAULT,
     val outputLanguage: Language = Language.DEFAULT,
     val subsystems: SubsystemStatus = SubsystemStatus(),
+    val sttDiagnostics: SttDiagnosticState = SttDiagnosticState(),
     val emergencyAlert: EmergencyAlertState = EmergencyAlertState(),
     val messages: List<ReceivedMessage> = emptyList(),
     val currentLiveTranscription: String = "",

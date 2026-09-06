@@ -1,6 +1,7 @@
 package com.example.itantra.speech
 
 import com.example.itantra.data.Language
+import kotlinx.coroutines.flow.StateFlow
 
 data class TranscriptionResult(
     val text: String,
@@ -18,9 +19,26 @@ data class SynthesisResult(
 )
 
 interface SpeechEngine {
-    fun initialize(): Result<Unit>
-    suspend fun transcribe(pcmAudio: ByteArray, language: Language): Result<TranscriptionResult>
-    suspend fun synthesize(text: String, language: Language, isEmergency: Boolean = false): Result<SynthesisResult>
-    fun normalize(text: String, language: Language): String
+    val isModelLoaded: StateFlow<Boolean>
+    val loadErrorMessage: StateFlow<String?>
+    val lastLatencyMs: StateFlow<Long>
+
+    fun initialize(): Result<Unit> = Result.success(Unit)
+
+    suspend fun transcribe(
+        audio: ByteArray
+    ): String
+
+    suspend fun transcribe(pcmAudio: ByteArray, language: Language): Result<TranscriptionResult> {
+        val text = transcribe(pcmAudio)
+        return Result.success(TranscriptionResult(text = text))
+    }
+
+    suspend fun synthesize(text: String, language: Language, isEmergency: Boolean = false): Result<SynthesisResult> {
+        return Result.failure(UnsupportedOperationException("Synthesis not implemented in this engine"))
+    }
+
+    fun normalize(text: String, language: Language): String = text.trim()
+
     fun release()
 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.itantra.audio.AndroidAudioEngine
+import com.example.itantra.speech.SherpaOnnxSpeechEngine
 import com.example.itantra.ui.MainViewModel
 import com.example.itantra.ui.screens.MainScreen
 import com.example.itantra.ui.theme.ITantraTheme
@@ -22,7 +23,8 @@ class MainActivity : ComponentActivity() {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return MainViewModel(
-                    audioEngine = AndroidAudioEngine(applicationContext)
+                    audioEngine = AndroidAudioEngine(applicationContext),
+                    speechEngine = SherpaOnnxSpeechEngine(applicationContext)
                 ) as T
             }
         }

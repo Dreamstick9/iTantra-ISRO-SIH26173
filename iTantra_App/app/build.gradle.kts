@@ -47,6 +47,10 @@ android {
         compose = true
     }
 
+    androidResources {
+        noCompress += listOf("onnx")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -55,6 +59,8 @@ android {
 }
 
 dependencies {
+    implementation(files("libs/sherpa-onnx-1.13.7.aar"))
+
     val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
     implementation(composeBom)
     androidTestImplementation(composeBom)

@@ -37,4 +37,28 @@ class MockSpeechEngineTest {
         assertTrue(result.audioPcm.isNotEmpty())
         assertTrue("RTF must be less than 1.0 (faster than real-time)", result.rtf < 1.0)
     }
+
+    @Test
+    fun testTranscribeByteArrayCoreInterface() = runBlocking {
+        val pcm = ByteArray(3200) { 1 }
+        val text = engine.transcribe(pcm)
+        assertTrue(text.isNotEmpty())
+        assertTrue(text.contains("Cyclone alert"))
+        assertEquals(1, engine.transcribeCallCount)
+    }
+
+    @Test
+    fun testModelStatusAndLatency() {
+        assertTrue(engine.isModelLoaded.value)
+        assertNull(engine.loadErrorMessage.value)
+        assertTrue(engine.lastLatencyMs.value > 0L)
+    }
+
+    @Test
+    fun testRelease() {
+        engine.release()
+        // verify no exception thrown
+        assertNotNull(engine)
+    }
 }
+
