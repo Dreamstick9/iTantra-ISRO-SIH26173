@@ -162,6 +162,15 @@ fun MainScreen(
                 transmissionMode = state.transmissionMode
             )
 
+            // 2. Multilingual Configuration (10 SIH Mandated Languages)
+            DualLanguageSelector(
+                inputLanguage = state.inputLanguage,
+                outputLanguage = state.outputLanguage,
+                onInputLanguageSelected = { viewModel.onInputLanguageSelected(it) },
+                onOutputLanguageSelected = { viewModel.onOutputLanguageSelected(it) },
+                onSwapLanguages = { viewModel.onSwapLanguages() }
+            )
+
             // Mode Selector: Push-To-Talk vs Continuous Hands-Free (Silero VAD)
             Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -394,13 +403,6 @@ fun MainScreen(
             )
 
             // 5. Tactical Settings & Subsystem Indicators
-            DualLanguageSelector(
-                inputLanguage = state.inputLanguage,
-                outputLanguage = state.outputLanguage,
-                onInputLanguageSelected = { viewModel.onInputLanguageSelected(it) },
-                onOutputLanguageSelected = { viewModel.onOutputLanguageSelected(it) },
-                onSwapLanguages = { viewModel.onSwapLanguages() }
-            )
 
             EmergencyAlertToggle(
                 alertState = state.emergencyAlert,

@@ -140,6 +140,7 @@ class MainViewModelTest {
         assertEquals("", initialDiag.recognizedText)
         assertNull(initialDiag.errorMessage)
 
+        viewModel.onInputLanguageSelected(Language.ENGLISH)
         viewModel.onPttPressed()
         advanceUntilIdle()
 
@@ -161,6 +162,34 @@ class MainViewModelTest {
         assertTrue(outgoingMsg.isOutgoing)
         assertEquals(finalDiag.recognizedText, outgoingMsg.text)
         assertEquals(Language.ENGLISH, outgoingMsg.originalLanguage)
+    }
+
+    @Test
+    fun testMultilingualInputLanguageSelectionAndPttFlow() = runTest(testDispatcher) {
+        advanceUntilIdle()
+
+        // Select Tamil
+        viewModel.onInputLanguageSelected(Language.TAMIL)
+        advanceUntilIdle()
+        assertEquals(Language.TAMIL, viewModel.appState.value.inputLanguage)
+
+        // Capture voice on Tamil
+        viewModel.onPttPressed()
+        advanceUntilIdle()
+        viewModel.onPttReleased()
+        advanceUntilIdle()
+
+        val finalState = viewModel.appState.value
+        assertEquals(1, finalState.messages.size)
+        val outgoingMsg = finalState.messages[0]
+        assertEquals(Language.TAMIL, outgoingMsg.originalLanguage)
+        assertEquals("Tamil", finalState.sttDiagnostics.language)
+        assertEquals(com.example.itantra.language.ModelRegistry.getSampleTranscript(Language.TAMIL), outgoingMsg.text)
+
+        // Swap languages
+        viewModel.onSwapLanguages()
+        advanceUntilIdle()
+        assertEquals(Language.TAMIL, viewModel.appState.value.outputLanguage)
     }
 
     @Test

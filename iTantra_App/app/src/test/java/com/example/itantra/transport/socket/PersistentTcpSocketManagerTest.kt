@@ -208,8 +208,8 @@ class PersistentTcpSocketManagerTest {
     @Test
     fun testConnectToServerFailsOnUnreachableHostAndSetsErrorStatus() {
         runBlocking {
-            // Use an unused port with maxRetries = 2
-            val unreachablePort = testPort + 500
+            // Use an unused valid port with maxRetries = 2
+            val unreachablePort = if (testPort + 500 <= 65530) testPort + 500 else testPort - 500
             val client = PersistentTcpSocketManager(port = unreachablePort, ioDispatcher = Dispatchers.IO)
 
             client.connectToServer(hostAddress = "127.0.0.1", maxRetries = 2, targetPort = unreachablePort)

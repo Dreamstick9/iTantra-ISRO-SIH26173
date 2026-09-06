@@ -77,6 +77,8 @@ class SttFlowIntegrationTest {
         val expectedTranscript = "Cyclone warning: Evacuate coastal lowlands immediately"
         mockSpeechEngine.simulatedTranscriptionText = expectedTranscript
         mockSpeechEngine.simulatedSttLatencyMs = 120L
+        viewModel.onInputLanguageSelected(Language.ENGLISH)
+        advanceUntilIdle()
 
         // Initial diagnostic verification
         val initialDiag = viewModel.appState.value.sttDiagnostics

@@ -105,38 +105,8 @@ enum class ContinuousModeState {
 // 3. MULTILINGUAL SUPPORT (10 SIH TARGET LANGUAGES)
 // ============================================================================
 
-enum class Language(
-    val isoCode: String,
-    val bcp47Tag: String,
-    val englishName: String,
-    val nativeName: String,
-    val scriptName: String
-) {
-    HINDI("hi", "hi-IN", "Hindi", "हिन्दी", "Devanagari"),
-    GUJARATI("gu", "gu-IN", "Gujarati", "ગુજરાતી", "Gujarati"),
-    MARATHI("mr", "mr-IN", "Marathi", "मराठी", "Devanagari"),
-    KANNADA("kn", "kn-IN", "Kannada", "ಕನ್ನಡ", "Kannada"),
-    MALAYALAM("ml", "ml-IN", "Malayalam", "മലയാളം", "Malayalam"),
-    TAMIL("ta", "ta-IN", "Tamil", "தமிழ்", "Tamil"),
-    TELUGU("te", "te-IN", "Telugu", "తెలుగు", "Telugu"),
-    ODIA("or", "or-IN", "Odia", "ଓଡ଼ିଆ", "Odia"),
-    BENGALI("bn", "bn-IN", "Bengali", "বাংলা", "Bengali"),
-    ENGLISH("en", "en-IN", "English", "English", "Latin");
-
-    companion object {
-        val DEFAULT: Language = HINDI
-
-        fun fromCode(code: String?, fallback: Language = HINDI): Language {
-            if (code.isNullOrBlank()) return fallback
-            val cleaned = code.trim().lowercase()
-            return entries.firstOrNull {
-                it.isoCode.equals(cleaned, ignoreCase = true) ||
-                it.bcp47Tag.equals(cleaned, ignoreCase = true) ||
-                cleaned.startsWith(it.isoCode)
-            } ?: fallback
-        }
-    }
-}
+typealias SupportedLanguage = com.example.itantra.language.SupportedLanguage
+typealias Language = com.example.itantra.language.SupportedLanguage
 
 // ============================================================================
 // 4. HARDWARE & ON-DEVICE AI SUBSYSTEM STATUS

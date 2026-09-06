@@ -38,7 +38,7 @@ interface SpeechEngine {
         return Result.failure(UnsupportedOperationException("Synthesis not implemented in this engine"))
     }
 
-    fun normalize(text: String, language: Language): String = text.trim()
+    fun normalize(text: String, language: Language): String = com.example.itantra.language.ModelRegistry.normalize(text, language)
 
     fun release()
 }

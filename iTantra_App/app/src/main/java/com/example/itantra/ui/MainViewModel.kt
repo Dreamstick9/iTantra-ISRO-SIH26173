@@ -317,8 +317,11 @@ class MainViewModel(
 
                 var recognizedText = ""
                 var sttError: String? = null
+                val inputLang = _appState.value.inputLanguage
                 try {
-                    recognizedText = speechEngine.transcribe(pcmAudio)
+                    val res = speechEngine.transcribe(pcmAudio, inputLang)
+                    val raw = res.getOrNull()?.text ?: speechEngine.transcribe(pcmAudio)
+                    recognizedText = speechEngine.normalize(raw, inputLang)
                 } catch (e: Exception) {
                     Logger.e(TAG, "STT transcription error: ${e.message}", e)
                     sttError = e.message ?: "STT transcription error"
@@ -416,7 +419,7 @@ class MainViewModel(
                     senderId = "LOCAL_USER",
                     senderName = "Local Operator (You)",
                     text = recognizedText,
-                    originalLanguage = Language.ENGLISH,
+                    originalLanguage = _appState.value.inputLanguage,
                     targetLanguage = _appState.value.outputLanguage,
                     timestamp = System.currentTimeMillis(),
                     messageType = if (isEmergency) MessageType.EMERGENCY_ALERT else MessageType.VOICE_NOTE,
@@ -431,7 +434,7 @@ class MainViewModel(
                     val newDiagnostics = state.sttDiagnostics.copy(
                         isModelLoaded = speechEngine.isModelLoaded.value,
                         isOffline = true,
-                        language = "English",
+                        language = state.inputLanguage.englishName,
                         processingTimeMs = sttLatency,
                         recognizedText = recognizedText,
                         errorMessage = null
@@ -701,7 +704,10 @@ class MainViewModel(
                                 )
                             }
 
-                            val recognizedText = speechEngine.transcribe(finalizedPcm)
+                            val inputLang = _appState.value.inputLanguage
+                            val res = speechEngine.transcribe(finalizedPcm, inputLang)
+                            val raw = res.getOrNull()?.text ?: speechEngine.transcribe(finalizedPcm)
+                            val recognizedText = speechEngine.normalize(raw, inputLang)
                             t1 = System.currentTimeMillis()
                             val sttLatency = t1 - t0
 
@@ -745,7 +751,7 @@ class MainViewModel(
                                     senderId = "local_node",
                                     senderName = "Local Operator (Hands-Free)",
                                     text = recognizedText,
-                                    originalLanguage = Language.ENGLISH,
+                                    originalLanguage = _appState.value.inputLanguage,
                                     latencyMetrics = latencyMetrics,
                                     isOutgoing = true,
                                     playbackStatus = MessagePlaybackStatus.PLAYED
@@ -983,7 +989,7 @@ class MainViewModel(
     }
 
     fun simulateReceiveMessage(customText: String? = null) {
-        val text = customText ?: "चक्रवात चेतावनी: तटीय क्षेत्र तुरंत खाली करें"
+        val text = customText ?: com.example.itantra.language.ModelRegistry.getSampleTranscript(_appState.value.inputLanguage)
         val now = System.currentTimeMillis()
         val simT0 = now - 380L
         val simT1 = now - 190L

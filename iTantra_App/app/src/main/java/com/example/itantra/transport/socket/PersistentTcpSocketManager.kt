@@ -216,6 +216,9 @@ class PersistentTcpSocketManager(
                 Logger.i(TAG, "SocketException connecting to $hostAddress:$targetPort (attempt $attempt): ${e.message}")
             } catch (e: IOException) {
                 Logger.i(TAG, "IOException connecting to $hostAddress:$targetPort (attempt $attempt): ${e.message}")
+            } catch (e: Exception) {
+                Logger.i(TAG, "Exception connecting to $hostAddress:$targetPort (attempt $attempt): ${e.message}")
+                break
             }
 
             if (attempt < maxRetries) {

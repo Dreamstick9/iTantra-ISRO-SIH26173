@@ -43,18 +43,7 @@ class MockSpeechEngine : SpeechEngine {
     override suspend fun transcribe(pcmAudio: ByteArray, language: Language): Result<TranscriptionResult> {
         transcribeCallCount++
         lastTranscribedAudio = pcmAudio
-        val text = simulatedTranscriptionText ?: when (language) {
-            Language.HINDI -> "चक्रवात चेतावनी तुरंत सुरक्षित स्थान पर जाएं"
-            Language.MARATHI -> "चक्रीवादळाचा इशारा त्वरित सुरक्षित स्थळी जा"
-            Language.BENGALI -> "ঘূর্ণিঝড় সতর্কতা অবিলম্বে নিরাপদ স্থানে যান"
-            Language.TAMIL -> "புயல் எச்சரிக்கை உடனடியாக பாதுகாப்பான இடத்திற்கு செல்லவும்"
-            Language.TELUGU -> "తుఫాను హెచ్చరిక వెంటనే సురಕ್ಷిత ప్రాంతానికి వెళ్లండి"
-            Language.KANNADA -> "ಚಂಡಮಾರುತದ ಎಚ್ಚರಿಕೆ ತಕ್ಷಣ ಸುರಕ್ಷಿತ ಸ್ಥಳಕ್ಕೆ ತೆರಳಿ"
-            Language.MALAYALAM -> "ചുഴലിക്കാറ്റ് മുന്നറിയിപ്പ് ഉടൻ സുരക്ഷിത സ്ഥാനത്തേക്ക് മാറുക"
-            Language.GUJARATI -> "વાવાઝોડાની ચેતવણી તરત જ સુરક્ષિત સ્થળે જાઓ"
-            Language.ODIA -> "ବାତ୍ୟା ଚେତାବନୀ ତୁରନ୍ତ ନିରାପଦ ସ୍ଥାନକୁ ଯାଆନ୍ତୁ"
-            Language.ENGLISH -> "Cyclone alert evacuate to high ground immediately"
-        }
+        val text = simulatedTranscriptionText ?: com.example.itantra.language.ModelRegistry.getSampleTranscript(language)
 
         _lastLatencyMs.value = simulatedSttLatencyMs
         Logger.i(TAG, "STT Transcribed [${language.isoCode}]: '$text' in ${simulatedSttLatencyMs}ms.")
@@ -88,7 +77,7 @@ class MockSpeechEngine : SpeechEngine {
     }
 
     override fun normalize(text: String, language: Language): String {
-        return text.trim()
+        return com.example.itantra.language.ModelRegistry.normalize(text, language)
     }
 
     override fun release() {

@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.itantra.data.Language
 
 @Composable
@@ -98,14 +99,10 @@ fun LanguageDropdown(
             value = "${selected.englishName} (${selected.nativeName})",
             onValueChange = {},
             readOnly = true,
-            label = { Text(label) },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.LangIcon,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-            },
+            singleLine = true,
+            maxLines = 1,
+            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+            label = { Text(label, fontSize = 11.sp) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
             modifier = Modifier
