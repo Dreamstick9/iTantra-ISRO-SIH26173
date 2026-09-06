@@ -4,11 +4,23 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +37,8 @@ fun MainScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.appState.collectAsState()
+    val diagnostics by viewModel.transportDiagnostics.collectAsState()
+    val peers by viewModel.discoveredPeers.collectAsState()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
@@ -44,9 +58,24 @@ fun MainScreen(
         viewModel.onPermissionResult(isGranted)
     }
 
+    var hasWifiDirectPermissions by remember {
+        mutableStateOf(com.example.itantra.transport.security.WifiDirectPermissionHelper.hasRequiredPermissions(context))
+    }
+
+    val wifiPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        hasWifiDirectPermissions = results.values.all { it }
+        if (hasWifiDirectPermissions) {
+            viewModel.onStartPeerDiscovery()
+        }
+    }
+
     LaunchedEffect(hasRecordAudioPermission) {
         viewModel.onPermissionResult(hasRecordAudioPermission)
     }
+
+    var showAdvancedDiagnostics by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -79,27 +108,62 @@ fun MainScreen(
                 .padding(innerPadding)
                 .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Stage 1 Audio Capture Subsystem & Debug HUD
-            AudioCaptureDebugCard(
-                pttState = state.pttState,
-                audioLevel = state.audioLevel,
-                debugInfo = state.lastAudioDebugInfo,
-                errorMessage = state.errorMessage,
-                hasPermission = hasRecordAudioPermission,
-                onRequestPermission = {
-                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            // Permission Banner (if mic permission missing)
+            if (!hasRecordAudioPermission) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Mic Permission",
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                text = "Microphone permission is required for Push-To-Talk.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Button(
+                            onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("Grant", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
+            }
+
+            // 1. Vertical Slice HUD (Active Status Banner + Latencies + Timestamps)
+            VerticalSliceHUD(
+                transceiverState = state.transceiverState,
+                timestamps = state.verticalSliceTimestamps,
+                metrics = state.lastLatencyMetrics
             )
 
-            // 2. Offline English STT Diagnostic Card (Stage 2 Speech Engine HUD)
-            SttDiagnosticCard(
-                diagnosticState = state.sttDiagnostics
-            )
-
-            // 3. Push-To-Talk Button (Stage 1 Core Interaction)
+            // 2. Tactile Push-To-Talk Button (Single button interaction reflecting 6 states)
             PttButton(
+                transceiverState = state.transceiverState,
                 pttState = state.pttState,
                 isLocked = state.isPttLocked,
                 isEmergency = state.emergencyAlert.isActive,
@@ -120,27 +184,52 @@ fun MainScreen(
                 }
             )
 
-            // 4. Conversation History & Transcript Log
+            // 3. Conversation History & Transcript Log
             ReceivedMessagesArea(
                 messages = state.messages,
                 onPlayAudio = { viewModel.onPlayMessageAudio(it) },
                 onSimulateReceive = { viewModel.simulateReceiveMessage() }
             )
 
-            // 3. Subsystem Health Indicators
-            SubsystemStatusIndicators(status = state.subsystems)
-
-            // 4. Connection Status Card
+            // 4. Wi-Fi Direct Phone-to-Phone Transport & Link Diagnostic HUD
             ConnectionStatusCard(
                 status = state.connectionStatus,
                 transportType = state.transportType,
                 deviceName = state.connectedDeviceName,
                 deviceAddress = state.connectedDeviceAddress,
-                onConnectOrScanClick = { viewModel.onConnectOrScanClick() },
-                onDisconnectClick = { viewModel.onDisconnectClick() }
+                onConnectOrScanClick = {
+                    if (!com.example.itantra.transport.security.WifiDirectPermissionHelper.hasRequiredPermissions(context)) {
+                        wifiPermissionLauncher.launch(com.example.itantra.transport.security.WifiDirectPermissionHelper.getRequiredPermissions())
+                    } else {
+                        viewModel.onStartPeerDiscovery()
+                    }
+                },
+                onDisconnectClick = { viewModel.onDisconnectTransport() }
             )
 
-            // 5. Multilingual Selection (10 SIH Languages)
+            WifiDirectDiagnosticCard(
+                diagnostics = diagnostics,
+                peers = peers,
+                onStartDiscovery = {
+                    if (!com.example.itantra.transport.security.WifiDirectPermissionHelper.hasRequiredPermissions(context)) {
+                        wifiPermissionLauncher.launch(com.example.itantra.transport.security.WifiDirectPermissionHelper.getRequiredPermissions())
+                    } else {
+                        viewModel.onStartPeerDiscovery()
+                    }
+                },
+                onConnectPeer = { peer ->
+                    if (!com.example.itantra.transport.security.WifiDirectPermissionHelper.hasRequiredPermissions(context)) {
+                        wifiPermissionLauncher.launch(com.example.itantra.transport.security.WifiDirectPermissionHelper.getRequiredPermissions())
+                    } else {
+                        viewModel.onConnectToPeer(peer)
+                    }
+                },
+                onDisconnect = { viewModel.onDisconnectTransport() },
+                onSendTextMessage = { text -> viewModel.onSendTextMessage(text) },
+                onSendAlertMessage = { alert -> viewModel.onSendAlertMessage(alert) }
+            )
+
+            // 5. Tactical Settings & Subsystem Indicators
             DualLanguageSelector(
                 inputLanguage = state.inputLanguage,
                 outputLanguage = state.outputLanguage,
@@ -149,17 +238,107 @@ fun MainScreen(
                 onSwapLanguages = { viewModel.onSwapLanguages() }
             )
 
-            // 6. Emergency Alert Toggle (ISRO/INCOIS Distress Mode)
             EmergencyAlertToggle(
                 alertState = state.emergencyAlert,
                 onToggle = { viewModel.onEmergencyAlertToggled(it) }
             )
 
-            // 7. Transmission Mode Switch
+            SubsystemStatusIndicators(status = state.subsystems)
+
             TransmissionModeSwitch(
                 currentMode = state.transmissionMode,
                 onModeChanged = { viewModel.onTransmissionModeChanged(it) }
             )
+
+            // 6. Advanced Engine Diagnostics (Neatly organized & collapsible to keep vertical slice uncluttered)
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        onClick = { showAdvancedDiagnostics = !showAdvancedDiagnostics },
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Diagnostics",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "Advanced Subsystem Diagnostics",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Icon(
+                                imageVector = if (showAdvancedDiagnostics) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = if (showAdvancedDiagnostics) "Collapse" else "Expand",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = showAdvancedDiagnostics,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            // Low-level Audio Capture HUD
+                            AudioCaptureDebugCard(
+                                pttState = state.pttState,
+                                audioLevel = state.audioLevel,
+                                debugInfo = state.lastAudioDebugInfo,
+                                errorMessage = state.errorMessage,
+                                hasPermission = hasRecordAudioPermission,
+                                onRequestPermission = {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            )
+
+                            // Offline STT Diagnostic Card
+                            SttDiagnosticCard(
+                                diagnosticState = state.sttDiagnostics
+                            )
+
+                            // Offline TTS Manual Test Card
+                            TtsTestCard(
+                                ttsState = state.ttsState,
+                                onTextChanged = { viewModel.onTtsInputChanged(it) },
+                                onSpeak = { viewModel.onSpeakTts(it) },
+                                onStop = { viewModel.onStopTts() }
+                            )
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
         }

@@ -125,7 +125,8 @@ class MainViewModelTest {
         val state = viewModel.appState.value
         assertEquals(1, state.messages.size)
         assertEquals("Test satellite advisory", state.messages[0].text)
-        assertNotNull(audioEngine.lastPlayedAudio)
+        assertEquals(com.example.itantra.data.MessagePlaybackStatus.PLAYED, state.messages[0].playbackStatus)
+        assertNotNull(state.lastLatencyMetrics)
     }
 
     @Test
@@ -160,5 +161,50 @@ class MainViewModelTest {
         assertTrue(outgoingMsg.isOutgoing)
         assertEquals(finalDiag.recognizedText, outgoingMsg.text)
         assertEquals(Language.ENGLISH, outgoingMsg.originalLanguage)
+    }
+
+    @Test
+    fun testWifiDirectDiscoveryAndPeerObservation() = runTest(testDispatcher) {
+        viewModel.onStartPeerDiscovery()
+        advanceUntilIdle()
+
+        // Verify peers flow is accessible from ViewModel
+        assertNotNull(viewModel.discoveredPeers.value)
+        assertNotNull(viewModel.transportDiagnostics.value)
+    }
+
+    @Test
+    fun testWifiDirectSendTextMessageReflectedInState() = runTest(testDispatcher) {
+        viewModel.onSendTextMessage("HELLO FROM PHONE A")
+        advanceUntilIdle()
+
+        val messages = viewModel.appState.value.messages
+        assertEquals(1, messages.size)
+        val sent = messages[0]
+        assertTrue(sent.isOutgoing)
+        assertEquals("HELLO FROM PHONE A", sent.text)
+        assertEquals("Local Operator (You)", sent.senderName)
+    }
+
+    @Test
+    fun testWifiDirectSendAlertMessageReflectedInState() = runTest(testDispatcher) {
+        viewModel.onSendAlertMessage("CYCLONE ADVISORY")
+        advanceUntilIdle()
+
+        val messages = viewModel.appState.value.messages
+        assertEquals(1, messages.size)
+        val sent = messages[0]
+        assertTrue(sent.isOutgoing)
+        assertEquals("CYCLONE ADVISORY", sent.text)
+        assertEquals(com.example.itantra.data.MessageType.EMERGENCY_ALERT, sent.messageType)
+        assertTrue(sent.isEmergency)
+    }
+
+    @Test
+    fun testWifiDirectDisconnectAction() = runTest(testDispatcher) {
+        viewModel.onDisconnectTransport()
+        advanceUntilIdle()
+
+        assertEquals(com.example.itantra.data.ConnectionStatus.DISCONNECTED, viewModel.appState.value.connectionStatus)
     }
 }

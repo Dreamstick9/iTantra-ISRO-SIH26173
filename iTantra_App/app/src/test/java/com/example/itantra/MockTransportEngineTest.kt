@@ -56,9 +56,28 @@ class MockTransportEngineTest {
         )
 
         engine.simulateIncomingMessage(incoming)
-        val received = engine.incomingMessages.first()
+        val received = engine.incomingMessages().first()
 
         assertEquals(incoming.id, received.id)
         assertEquals(incoming.text, received.text)
+    }
+
+    @Test
+    fun testStartDiscoveryAndPeerConnect() = runBlocking {
+        engine.startDiscovery()
+        assertEquals(com.example.itantra.transport.P2pStatus.DISCOVERING, engine.diagnostics.value.p2pStatus)
+
+        val peer = com.example.itantra.transport.Peer(
+            deviceAddress = "AA:BB:CC:DD:EE:FF",
+            deviceName = "Phone-B-Target"
+        )
+        engine.connect(peer)
+        assertEquals(com.example.itantra.transport.TcpStatus.CONNECTED, engine.diagnostics.value.tcpStatus)
+        assertEquals("Phone-B-Target", engine.diagnostics.value.connectedPeerName)
+
+        val transportMsg = com.example.itantra.transport.TransportMessage.text("HELLO FROM PHONE A")
+        engine.send(transportMsg)
+        assertEquals(1, engine.sentTransportMessages.size)
+        assertEquals("HELLO FROM PHONE A", engine.sentTransportMessages.first().text)
     }
 }

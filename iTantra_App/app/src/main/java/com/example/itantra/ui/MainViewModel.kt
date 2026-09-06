@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.itantra.audio.AudioConfig
 import com.example.itantra.audio.AudioEngine
+import com.example.itantra.audio.AudioTrackPlayer
 import com.example.itantra.audio.MockAudioEngine
 import com.example.itantra.compression.CompressionEngine
 import com.example.itantra.compression.MockCompressionEngine
@@ -13,7 +14,15 @@ import com.example.itantra.service.ServiceController
 import com.example.itantra.speech.MockSpeechEngine
 import com.example.itantra.speech.SpeechEngine
 import com.example.itantra.transport.MockTransportEngine
+import com.example.itantra.transport.Peer
+import com.example.itantra.transport.TcpStatus
+import com.example.itantra.transport.TransportDiagnostics
 import com.example.itantra.transport.TransportEngine
+import com.example.itantra.transport.TransportMessage
+import com.example.itantra.tts.AudioData
+import com.example.itantra.tts.MockTtsEngine
+import com.example.itantra.tts.TtsEngine
+import com.example.itantra.tts.TtsPlaybackState
 import com.example.itantra.util.Logger
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -28,16 +37,21 @@ import java.util.UUID
 class MainViewModel(
     val audioEngine: AudioEngine = MockAudioEngine(),
     val speechEngine: SpeechEngine = MockSpeechEngine(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    val ttsEngine: TtsEngine = MockTtsEngine(ioDispatcher = ioDispatcher),
     val transportEngine: TransportEngine = MockTransportEngine(),
     val compressionEngine: CompressionEngine = MockCompressionEngine(),
     val serviceController: ServiceController = MockServiceController(),
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    val audioTrackPlayer: AudioTrackPlayer = AudioTrackPlayer(ioDispatcher)
 ) : ViewModel() {
 
     private val TAG = "MainViewModel"
 
     private val _appState = MutableStateFlow(AppState.INITIAL)
     val appState: StateFlow<AppState> = _appState.asStateFlow()
+
+    val transportDiagnostics: StateFlow<TransportDiagnostics> = transportEngine.diagnostics
+    val discoveredPeers: StateFlow<List<Peer>> = transportEngine.peers
 
     init {
         Logger.i(TAG, "MainViewModel initialized with Stage 1 decoupled architecture.")
@@ -58,20 +72,31 @@ class MainViewModel(
             audioEngine.recordingState.collect { recState ->
                 when (recState) {
                     com.example.itantra.audio.AudioRecordingState.RECORDING -> {
-                        _appState.update { it.copy(pttState = PttState.RECORDING) }
+                        _appState.update {
+                            it.copy(
+                                pttState = PttState.RECORDING,
+                                transceiverState = TransceiverState.RECORDING
+                            )
+                        }
                     }
                     com.example.itantra.audio.AudioRecordingState.PROCESSING -> {
-                        _appState.update { it.copy(pttState = PttState.PROCESSING) }
+                        // Maintain active transceiver state if transcribing
                     }
                     com.example.itantra.audio.AudioRecordingState.IDLE -> {
-                        if (_appState.value.pttState != PttState.IDLE) {
-                            _appState.update { it.copy(pttState = PttState.IDLE) }
+                        if (_appState.value.transceiverState == TransceiverState.RECORDING) {
+                            _appState.update {
+                                it.copy(
+                                    pttState = PttState.IDLE,
+                                    transceiverState = TransceiverState.IDLE
+                                )
+                            }
                         }
                     }
                     com.example.itantra.audio.AudioRecordingState.ERROR -> {
                         _appState.update {
                             it.copy(
                                 pttState = PttState.IDLE,
+                                transceiverState = TransceiverState.IDLE,
                                 isPttPressed = false,
                                 isPttLocked = false
                             )
@@ -95,9 +120,24 @@ class MainViewModel(
             }
         }
 
+        // Observe link diagnostics to enrich device info in AppState
+        viewModelScope.launch(ioDispatcher) {
+            transportEngine.diagnostics.collect { diag ->
+                if (diag.tcpStatus == TcpStatus.CONNECTED) {
+                    _appState.update {
+                        it.copy(
+                            connectedDeviceName = diag.connectedPeerName ?: if (diag.isGroupOwner) "Group Client" else "Group Owner (GO)",
+                            connectedDeviceAddress = "${diag.remoteIpAddress ?: "192.168.49.1"}:8988",
+                            transportType = TransportType.WIFI_DIRECT
+                        )
+                    }
+                }
+            }
+        }
+
         // Observe incoming messages received over transport
         viewModelScope.launch(ioDispatcher) {
-            transportEngine.incomingMessages.collect { message ->
+            transportEngine.incomingMessages().collect { message ->
                 handleIncomingMessage(message)
             }
         }
@@ -128,6 +168,41 @@ class MainViewModel(
                 }
             }
         }
+
+        // Observe TTS engine state and metrics for UI HUD
+        viewModelScope.launch(ioDispatcher) {
+            combine(
+                ttsEngine.isModelLoaded,
+                ttsEngine.playbackState,
+                combine(ttsEngine.lastLatencyMs, ttsEngine.lastRtf, ttsEngine.lastDurationMs) { lat, rtf, dur -> Triple(lat, rtf, dur) },
+                ttsEngine.errorMessage
+            ) { isLoaded, pState, (latency, rtf, duration), err ->
+                TtsStateTuple(isLoaded, pState, latency, rtf, duration, err)
+            }.collect { info ->
+                _appState.update { state ->
+                    val ttsSubState = when {
+                        info.isLoaded && info.pState == TtsPlaybackState.PLAYING -> SubsystemState.ACTIVE
+                        info.isLoaded -> SubsystemState.READY
+                        info.err != null -> SubsystemState.ERROR
+                        else -> SubsystemState.INITIALIZING
+                    }
+                    state.copy(
+                        subsystems = state.subsystems.copy(
+                            tts = ttsSubState,
+                            ttsErrorMessage = info.err
+                        ),
+                        ttsState = state.ttsState.copy(
+                            isModelLoaded = info.isLoaded,
+                            playbackState = info.pState,
+                            synthesisLatencyMs = info.latency,
+                            realTimeFactor = info.rtf,
+                            audioDurationMs = info.duration,
+                            errorMessage = info.err
+                        )
+                    )
+                }
+            }
+        }
     }
 
     // ========================================================================
@@ -144,10 +219,11 @@ class MainViewModel(
     }
 
     fun onPttPressed() {
-        if (_appState.value.pttState != PttState.IDLE) return
+        if (_appState.value.transceiverState != TransceiverState.IDLE) return
 
         _appState.update {
             it.copy(
+                transceiverState = TransceiverState.RECORDING,
                 pttState = PttState.RECORDING,
                 isPttPressed = true,
                 statusMessage = "Recording PCM audio...",
@@ -162,6 +238,7 @@ class MainViewModel(
                 Logger.e(TAG, "Microphone permission missing: ${e.message}")
                 _appState.update {
                     it.copy(
+                        transceiverState = TransceiverState.IDLE,
                         pttState = PttState.IDLE,
                         isPttPressed = false,
                         isPttLocked = false,
@@ -174,6 +251,7 @@ class MainViewModel(
                 Logger.e(TAG, "AudioRecord initialization error: ${e.message}", e)
                 _appState.update {
                     it.copy(
+                        transceiverState = TransceiverState.IDLE,
                         pttState = PttState.IDLE,
                         isPttPressed = false,
                         isPttLocked = false,
@@ -186,10 +264,13 @@ class MainViewModel(
     }
 
     fun onPttReleased() {
-        if (_appState.value.pttState != PttState.RECORDING) return
+        if (_appState.value.transceiverState != TransceiverState.RECORDING) return
+
+        val t0 = System.currentTimeMillis()
 
         _appState.update {
             it.copy(
+                transceiverState = TransceiverState.TRANSCRIBING,
                 pttState = PttState.PROCESSING,
                 isPttPressed = false,
                 isPttLocked = false,
@@ -201,20 +282,26 @@ class MainViewModel(
             try {
                 val pcmAudio = audioEngine.stopRecording()
 
-                if (pcmAudio.isEmpty()) {
+                if (pcmAudio.isEmpty() || pcmAudio.size < 3200) {
+                    val tooShortStatus = if (pcmAudio.isEmpty()) {
+                        "Audio capture too short (0 bytes)"
+                    } else {
+                        "Audio too short (${pcmAudio.size} bytes < 100ms)"
+                    }
                     _appState.update {
                         it.copy(
+                            transceiverState = TransceiverState.IDLE,
                             pttState = PttState.IDLE,
-                            statusMessage = "Audio capture too short (0 bytes)",
+                            statusMessage = tooShortStatus,
                             errorMessage = null
                         )
                     }
                     return@launch
                 }
 
-                val durationMs = (pcmAudio.size * 1000L) / AudioConfig.BYTES_PER_SECOND
+                val audioDurationMs = (pcmAudio.size * 1000L) / AudioConfig.BYTES_PER_SECOND
                 val debugInfo = AudioDebugInfo(
-                    durationMs = durationMs,
+                    durationMs = audioDurationMs,
                     byteCount = pcmAudio.size,
                     message = "Audio captured successfully",
                     sampleRate = AudioConfig.SAMPLE_RATE_HZ,
@@ -223,10 +310,8 @@ class MainViewModel(
                     timestamp = System.currentTimeMillis()
                 )
 
-                Logger.i(TAG, "Audio captured successfully: ${pcmAudio.size} bytes ($durationMs ms). Transcribing via speech engine...")
+                Logger.i(TAG, "Audio captured successfully: ${pcmAudio.size} bytes ($audioDurationMs ms). Transcribing via speech engine...")
 
-                // Measure latency and transcribe PCM audio via speechEngine
-                val startTime = System.currentTimeMillis()
                 var recognizedText = ""
                 var sttError: String? = null
                 try {
@@ -235,61 +320,140 @@ class MainViewModel(
                     Logger.e(TAG, "STT transcription error: ${e.message}", e)
                     sttError = e.message ?: "STT transcription error"
                 }
-                val processingTimeMs = System.currentTimeMillis() - startTime
 
-                Logger.i(TAG, "Transcribed in ${processingTimeMs}ms: '$recognizedText'")
+                val t1 = System.currentTimeMillis()
+                val sttLatency = t1 - t0
+
+                Logger.i(TAG, "Transcribed in ${sttLatency}ms: '$recognizedText'")
+
+                if (recognizedText.isBlank()) {
+                    val status = if (sttError != null) {
+                        "Audio captured successfully (${pcmAudio.size} bytes). STT Error: $sttError"
+                    } else {
+                        "Audio captured successfully (${pcmAudio.size} bytes, ${audioDurationMs}ms) | No speech recognized"
+                    }
+                    _appState.update { state ->
+                        state.copy(
+                            transceiverState = TransceiverState.IDLE,
+                            pttState = PttState.IDLE,
+                            lastAudioDebugInfo = debugInfo,
+                            sttDiagnostics = state.sttDiagnostics.copy(
+                                isModelLoaded = speechEngine.isModelLoaded.value,
+                                isOffline = true,
+                                language = "English",
+                                processingTimeMs = sttLatency,
+                                recognizedText = "",
+                                errorMessage = sttError
+                            ),
+                            statusMessage = status,
+                            errorMessage = sttError
+                        )
+                    }
+                    return@launch
+                }
+
+                // recognizedText isNotBlank:
+                _appState.update {
+                    it.copy(
+                        transceiverState = TransceiverState.TRANSMITTING,
+                        pttState = PttState.PROCESSING,
+                        statusMessage = "Transmitting message..."
+                    )
+                }
+
+                val isEmergency = _appState.value.emergencyAlert.isActive
+                val t2BeforeSend = System.currentTimeMillis()
+                val message = if (isEmergency) {
+                    TransportMessage.alert(
+                        text = recognizedText,
+                        language = _appState.value.inputLanguage.isoCode,
+                        priority = 2,
+                        t0 = t0,
+                        t1 = t1,
+                        t2 = t2BeforeSend,
+                        sttLatencyMs = sttLatency,
+                        audioDurationMs = audioDurationMs
+                    )
+                } else {
+                    TransportMessage.text(
+                        text = recognizedText,
+                        language = _appState.value.inputLanguage.isoCode,
+                        priority = 0,
+                        t0 = t0,
+                        t1 = t1,
+                        t2 = t2BeforeSend,
+                        sttLatencyMs = sttLatency,
+                        audioDurationMs = audioDurationMs
+                    )
+                }
+
+                try {
+                    transportEngine.send(message)
+                } catch (e: Exception) {
+                    Logger.e(TAG, "Transport send error: ${e.message}", e)
+                }
+
+                val t2 = System.currentTimeMillis()
+                val vsTimestamps = VerticalSliceTimestamps(
+                    t0PttReleased = t0,
+                    t1SttComplete = t1,
+                    t2Transmitted = t2,
+                    sttLatencyMs = sttLatency,
+                    endToEndLatencyMs = t2 - t0
+                )
+
+                val latencyMetrics = vsTimestamps.toLatencyMetrics(
+                    audioDurationMs = audioDurationMs,
+                    characterCount = recognizedText.length,
+                    compressedByteSize = message.compressedPayload.size
+                )
+
+                val outgoingMessage = ReceivedMessage(
+                    id = message.messageId,
+                    senderId = "LOCAL_USER",
+                    senderName = "Local Operator (You)",
+                    text = recognizedText,
+                    originalLanguage = Language.ENGLISH,
+                    targetLanguage = _appState.value.outputLanguage,
+                    timestamp = System.currentTimeMillis(),
+                    messageType = if (isEmergency) MessageType.EMERGENCY_ALERT else MessageType.VOICE_NOTE,
+                    isEmergency = isEmergency,
+                    latencyMetrics = latencyMetrics,
+                    rawUtf8ByteSize = recognizedText.toByteArray(Charsets.UTF_8).size,
+                    compressedByteSize = (recognizedText.length * 0.75).toInt().coerceAtLeast(1),
+                    isOutgoing = true
+                )
 
                 _appState.update { state ->
                     val newDiagnostics = state.sttDiagnostics.copy(
                         isModelLoaded = speechEngine.isModelLoaded.value,
                         isOffline = true,
                         language = "English",
-                        processingTimeMs = processingTimeMs,
+                        processingTimeMs = sttLatency,
                         recognizedText = recognizedText,
-                        errorMessage = sttError
+                        errorMessage = null
                     )
 
-                    val updatedMessages = if (recognizedText.isNotBlank()) {
-                        val outgoingMessage = ReceivedMessage(
-                            id = UUID.randomUUID().toString(),
-                            senderId = "LOCAL_USER",
-                            senderName = "Local Operator (You)",
-                            text = recognizedText,
-                            originalLanguage = Language.ENGLISH,
-                            targetLanguage = state.outputLanguage,
-                            timestamp = System.currentTimeMillis(),
-                            messageType = if (state.emergencyAlert.isActive) MessageType.EMERGENCY_ALERT else MessageType.VOICE_NOTE,
-                            isEmergency = state.emergencyAlert.isActive,
-                            rawUtf8ByteSize = recognizedText.toByteArray(Charsets.UTF_8).size,
-                            compressedByteSize = (recognizedText.length * 0.75).toInt().coerceAtLeast(1),
-                            isOutgoing = true
-                        )
-                        listOf(outgoingMessage) + state.messages
-                    } else {
-                        state.messages
-                    }
-
-                    val updatedStatus = if (sttError != null) {
-                        "Audio captured successfully (${pcmAudio.size} bytes). STT Error: $sttError"
-                    } else if (recognizedText.isNotBlank()) {
-                        "Audio captured successfully (${pcmAudio.size} bytes, ${durationMs}ms) | STT: \"$recognizedText\" (${processingTimeMs}ms)"
-                    } else {
-                        "Audio captured successfully (${pcmAudio.size} bytes, ${durationMs}ms)"
-                    }
+                    val updatedMessages = listOf(outgoingMessage) + state.messages
+                    val updatedStatus = "Audio captured successfully (${pcmAudio.size} bytes, ${audioDurationMs}ms) | STT: \"$recognizedText\" (${sttLatency}ms) | Sent (${t2 - t0}ms)"
 
                     state.copy(
+                        transceiverState = TransceiverState.IDLE,
                         pttState = PttState.IDLE,
                         lastAudioDebugInfo = debugInfo,
                         sttDiagnostics = newDiagnostics,
                         messages = updatedMessages,
+                        verticalSliceTimestamps = vsTimestamps,
+                        lastLatencyMetrics = latencyMetrics,
                         statusMessage = updatedStatus,
-                        errorMessage = sttError
+                        errorMessage = null
                     )
                 }
             } catch (e: Exception) {
                 Logger.e(TAG, "Error stopping audio recording: ${e.message}", e)
                 _appState.update {
                     it.copy(
+                        transceiverState = TransceiverState.IDLE,
                         pttState = PttState.IDLE,
                         errorMessage = "AudioRecord stop error: ${e.message}",
                         statusMessage = "Error stopping capture"
@@ -382,25 +546,138 @@ class MainViewModel(
         }
     }
 
+    fun onStartPeerDiscovery() {
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                transportEngine.startDiscovery()
+            } catch (e: Exception) {
+                Logger.e(TAG, "Error starting peer discovery: ${e.message}", e)
+                _appState.update { it.copy(errorMessage = "Discovery error: ${e.message}") }
+            }
+        }
+    }
+
+    fun onConnectToPeer(peer: Peer) {
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                transportEngine.connect(peer)
+            } catch (e: Exception) {
+                Logger.e(TAG, "Error connecting to peer ${peer.deviceName}: ${e.message}", e)
+                _appState.update { it.copy(errorMessage = "Connect error: ${e.message}") }
+            }
+        }
+    }
+
+    fun onDisconnectTransport() {
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                transportEngine.disconnect()
+            } catch (e: Exception) {
+                Logger.e(TAG, "Error disconnecting transport: ${e.message}", e)
+            }
+        }
+    }
+
+    fun onSendTextMessage(text: String) {
+        if (text.isBlank()) return
+        val message = TransportMessage.text(
+            text = text.trim(),
+            language = _appState.value.inputLanguage.isoCode,
+            priority = 0
+        )
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                transportEngine.send(message)
+                val uiMsg = message.toReceivedMessage().copy(
+                    isOutgoing = true,
+                    senderName = "Local Operator (You)"
+                )
+                _appState.update {
+                    it.copy(
+                        messages = listOf(uiMsg) + it.messages,
+                        statusMessage = "Sent: \"${text.take(30)}\""
+                    )
+                }
+            } catch (e: Exception) {
+                Logger.e(TAG, "Failed to send text message over Wi-Fi Direct: ${e.message}", e)
+                _appState.update { it.copy(errorMessage = "Send failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun onSendAlertMessage(text: String) {
+        if (text.isBlank()) return
+        val alert = TransportMessage.alert(
+            text = text.trim(),
+            language = _appState.value.inputLanguage.isoCode,
+            priority = 2
+        )
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                transportEngine.send(alert)
+                val uiMsg = alert.toReceivedMessage().copy(
+                    isOutgoing = true,
+                    senderName = "Local Operator (You)"
+                )
+                _appState.update {
+                    it.copy(
+                        messages = listOf(uiMsg) + it.messages,
+                        statusMessage = "BROADCAST ALERT SENT"
+                    )
+                }
+            } catch (e: Exception) {
+                Logger.e(TAG, "Failed to send alert over Wi-Fi Direct: ${e.message}", e)
+                _appState.update { it.copy(errorMessage = "Alert send failed: ${e.message}") }
+            }
+        }
+    }
+
     fun onPlayMessageAudio(message: ReceivedMessage) {
         viewModelScope.launch(ioDispatcher) {
-            val synthResult = speechEngine.synthesize(
-                text = message.text,
-                language = message.targetLanguage,
-                isEmergency = message.isEmergency
-            )
-            synthResult.onSuccess { synth ->
-                (audioEngine as? MockAudioEngine)?.playAudio(
-                    pcmData = synth.audioPcm,
-                    sampleRate = synth.sampleRate,
-                    isEmergency = message.isEmergency
+            _appState.update {
+                it.copy(
+                    transceiverState = TransceiverState.SPEAKING,
+                    pttState = PttState.PROCESSING,
+                    isAudioPlaying = true,
+                    statusMessage = "Playing voice from ${message.senderName}..."
                 )
+            }
+            try {
+                val audioData = ttsEngine.synthesize(message.text)
+                if (!audioData.isEmpty) {
+                    try {
+                        audioTrackPlayer.play(audioData.rawPcm, audioData.sampleRate)
+                    } catch (e: Throwable) {
+                        Logger.w(TAG, "AudioTrackPlayer playback error: ${e.message}, falling back to ttsEngine.speak", e)
+                        ttsEngine.speak(message.text)
+                    }
+                } else {
+                    ttsEngine.speak(message.text)
+                }
+            } catch (e: Exception) {
+                Logger.e(TAG, "Audio playback error: ${e.message}", e)
+                _appState.update { it.copy(errorMessage = "Playback failed: ${e.message}") }
+            } finally {
+                _appState.update {
+                    it.copy(
+                        transceiverState = TransceiverState.IDLE,
+                        pttState = PttState.IDLE,
+                        isAudioPlaying = false,
+                        statusMessage = "Playback completed"
+                    )
+                }
             }
         }
     }
 
     fun simulateReceiveMessage(customText: String? = null) {
         val text = customText ?: "चक्रवात चेतावनी: तटीय क्षेत्र तुरंत खाली करें"
+        val now = System.currentTimeMillis()
+        val simT0 = now - 380L
+        val simT1 = now - 190L
+        val simT2 = now - 28L
+        val simSttLat = simT1 - simT0
+
         val simMsg = ReceivedMessage(
             id = UUID.randomUUID().toString(),
             senderId = "INCOIS-NavIC-Sat",
@@ -408,7 +685,7 @@ class MainViewModel(
             text = text,
             originalLanguage = _appState.value.inputLanguage,
             targetLanguage = _appState.value.outputLanguage,
-            timestamp = System.currentTimeMillis(),
+            timestamp = now,
             messageType = if (_appState.value.emergencyAlert.isActive) MessageType.EMERGENCY_ALERT else MessageType.VOICE_NOTE,
             isEmergency = _appState.value.emergencyAlert.isActive,
             rawUtf8ByteSize = text.toByteArray(Charsets.UTF_8).size,
@@ -416,62 +693,201 @@ class MainViewModel(
             isOutgoing = false
         )
         viewModelScope.launch(ioDispatcher) {
-            transportEngine.sendMessage(simMsg)
-            handleIncomingMessage(simMsg)
+            val tMsg = TransportMessage.text(
+                text = text,
+                language = _appState.value.inputLanguage.isoCode,
+                priority = if (_appState.value.emergencyAlert.isActive) 1 else 0,
+                messageId = simMsg.id,
+                timestamp = now,
+                t0 = simT0,
+                t1 = simT1,
+                t2 = simT2,
+                sttLatencyMs = simSttLat
+            )
+            try {
+                transportEngine.sendMessage(simMsg)
+            } catch (e: Exception) {
+                Logger.d(TAG, "Simulate receive transport send skipped: ${e.message}")
+            }
+            handleIncomingMessage(tMsg)
         }
     }
 
-    private suspend fun handleIncomingMessage(message: ReceivedMessage) {
-        val synthStart = System.currentTimeMillis()
-        val normalized = speechEngine.normalize(message.text, message.targetLanguage)
-        val synthResult = speechEngine.synthesize(
-            text = normalized,
-            language = message.targetLanguage,
-            isEmergency = message.isEmergency
-        )
+    suspend fun handleIncomingMessage(message: TransportMessage) {
+        val t3 = System.currentTimeMillis()
 
-        val ttsDuration = System.currentTimeMillis() - synthStart
+        _appState.update {
+            it.copy(
+                transceiverState = TransceiverState.RECEIVING,
+                pttState = PttState.PROCESSING,
+                statusMessage = "Receiving message from peer..."
+            )
+        }
 
-        if (synthResult.isSuccess) {
-            val synth = synthResult.getOrThrow()
+        val text = message.text
+        val netLat = if (message.t2 > 0 && t3 >= message.t2 && (t3 - message.t2) < 30000L) (t3 - message.t2) else 15L
+
+        _appState.update {
+            it.copy(
+                transceiverState = TransceiverState.SPEAKING,
+                pttState = PttState.PROCESSING,
+                isAudioPlaying = true,
+                statusMessage = "Synthesizing voice from peer..."
+            )
+        }
+
+        val audioData = try {
+            ttsEngine.synthesize(text)
+        } catch (e: Exception) {
+            Logger.e(TAG, "TTS synthesis error: ${e.message}", e)
+            AudioData.EMPTY
+        }
+
+        val t4 = System.currentTimeMillis()
+        val ttsLatency = t4 - t3
+
+        if (!audioData.isEmpty) {
+            val t5 = System.currentTimeMillis()
+            val e2eLatency = message.sttLatencyMs + netLat + ttsLatency + (t5 - t4)
+
+            val vsTimestamps = VerticalSliceTimestamps(
+                t0PttReleased = message.t0,
+                t1SttComplete = message.t1,
+                t2Transmitted = message.t2,
+                t3Received = t3,
+                t4TtsComplete = t4,
+                t5PlaybackStarted = t5,
+                sttLatencyMs = message.sttLatencyMs,
+                networkLatencyMs = netLat,
+                ttsLatencyMs = ttsLatency,
+                endToEndLatencyMs = e2eLatency
+            )
+
+            val latencyMetrics = vsTimestamps.toLatencyMetrics(
+                audioDurationMs = audioData.durationMs,
+                characterCount = text.length,
+                compressedByteSize = message.compressedPayload.size
+            ).copy(
+                realTimeFactor = if (audioData.durationMs > 0) ttsLatency.toDouble() / audioData.durationMs.toDouble() else 0.0
+            )
+
+            val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
+                playbackStatus = MessagePlaybackStatus.PLAYING,
+                latencyMetrics = latencyMetrics
+            )
+
             _appState.update { state ->
-                val newMessages = listOf(message.copy(playbackStatus = MessagePlaybackStatus.PLAYING)) + state.messages
-                val latency = LatencyMetrics(
-                    sttLatencyMs = 180L,
-                    transmissionLatencyMs = 45L,
-                    ttsLatencyMs = ttsDuration,
-                    realTimeFactor = synth.rtf,
-                    endToEndLatencyMs = 180L + 45L + ttsDuration,
-                    audioDurationMs = synth.audioDurationMs,
-                    characterCount = message.text.length,
-                    compressedByteSize = message.compressedByteSize
-                )
+                val newMessages = listOf(receivedMsg) + state.messages
                 state.copy(
                     messages = newMessages,
                     isAudioPlaying = true,
-                    statusMessage = "Playing voice from ${message.senderName}",
-                    lastLatencyMetrics = latency
+                    statusMessage = "Playing voice from ${receivedMsg.senderName}",
+                    verticalSliceTimestamps = vsTimestamps,
+                    lastLatencyMetrics = latencyMetrics
                 )
             }
 
-            (audioEngine as? MockAudioEngine)?.playAudio(
-                pcmData = synth.audioPcm,
-                sampleRate = synth.sampleRate,
-                isEmergency = message.isEmergency
-            )
+            try {
+                audioTrackPlayer.play(audioData.rawPcm, audioData.sampleRate)
+            } catch (e: Throwable) {
+                Logger.w(TAG, "AudioTrackPlayer playback error: ${e.message}, falling back to ttsEngine.speak", e)
+                ttsEngine.speak(text)
+            }
 
-            _appState.update {
-                it.copy(
+            _appState.update { state ->
+                val updatedMessages = state.messages.map { msg ->
+                    if (msg.id == receivedMsg.id) msg.copy(playbackStatus = MessagePlaybackStatus.PLAYED) else msg
+                }
+                state.copy(
+                    messages = updatedMessages,
                     isAudioPlaying = false,
                     statusMessage = "Playback completed"
                 )
             }
         } else {
+            val receivedMsg = message.toReceivedMessage(t3Received = t3).copy(
+                playbackStatus = MessagePlaybackStatus.FAILED
+            )
             _appState.update { state ->
-                val newMessages = listOf(message.copy(playbackStatus = MessagePlaybackStatus.FAILED)) + state.messages
+                val newMessages = listOf(receivedMsg) + state.messages
                 state.copy(
                     messages = newMessages,
+                    isAudioPlaying = false,
+                    statusMessage = "TTS synthesis failed",
                     errorMessage = "TTS synthesis failed"
+                )
+            }
+        }
+
+        _appState.update {
+            it.copy(
+                transceiverState = TransceiverState.IDLE,
+                pttState = PttState.IDLE,
+                isAudioPlaying = false
+            )
+        }
+    }
+
+    suspend fun handleIncomingMessage(message: ReceivedMessage) {
+        val transportMsg = TransportMessage.fromReceivedMessage(message)
+        handleIncomingMessage(transportMsg)
+    }
+
+    // ========================================================================
+    // TTS OFFLINE SPEECH ACTIONS
+    // ========================================================================
+
+    fun onTtsInputChanged(newText: String) {
+        _appState.update { it.copy(ttsState = it.ttsState.copy(inputText = newText)) }
+    }
+
+    fun onSpeakTts(customText: String? = null) {
+        val textToSpeak = (customText ?: _appState.value.ttsState.inputText).trim()
+        if (textToSpeak.isBlank()) {
+            _appState.update {
+                it.copy(
+                    ttsState = it.ttsState.copy(errorMessage = "Text cannot be empty"),
+                    statusMessage = "Please enter text to synthesize"
+                )
+            }
+            return
+        }
+
+        _appState.update {
+            it.copy(
+                statusMessage = "Synthesizing offline speech: \"$textToSpeak\"...",
+                ttsState = it.ttsState.copy(errorMessage = null)
+            )
+        }
+
+        viewModelScope.launch(ioDispatcher) {
+            try {
+                ttsEngine.speak(textToSpeak)
+                _appState.update {
+                    it.copy(statusMessage = "Offline speech playback completed.")
+                }
+            } catch (e: Exception) {
+                Logger.e(TAG, "TTS speak error: ${e.message}", e)
+                _appState.update {
+                    it.copy(
+                        statusMessage = "TTS playback failed: ${e.message}",
+                        ttsState = it.ttsState.copy(errorMessage = e.message)
+                    )
+                }
+            }
+        }
+    }
+
+    fun onStopTts() {
+        viewModelScope.launch(ioDispatcher) {
+            ttsEngine.stop()
+            audioTrackPlayer.stop()
+            _appState.update {
+                it.copy(
+                    isAudioPlaying = false,
+                    transceiverState = TransceiverState.IDLE,
+                    pttState = PttState.IDLE,
+                    statusMessage = "TTS playback stopped."
                 )
             }
         }
@@ -481,7 +897,19 @@ class MainViewModel(
         super.onCleared()
         audioEngine.release()
         speechEngine.release()
+        ttsEngine.release()
         transportEngine.release()
+        audioTrackPlayer.release()
         Logger.i(TAG, "MainViewModel cleared.")
     }
 }
+
+private data class TtsStateTuple(
+    val isLoaded: Boolean,
+    val pState: TtsPlaybackState,
+    val latency: Long,
+    val rtf: Double,
+    val duration: Long,
+    val err: String?
+)
+

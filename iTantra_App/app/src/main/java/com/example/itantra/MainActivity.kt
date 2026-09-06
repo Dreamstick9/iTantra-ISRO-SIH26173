@@ -11,6 +11,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.itantra.audio.AndroidAudioEngine
 import com.example.itantra.speech.SherpaOnnxSpeechEngine
+import com.example.itantra.transport.wifidirect.WifiDirectTransportEngine
+import com.example.itantra.tts.SherpaOnnxTtsEngine
 import com.example.itantra.ui.MainViewModel
 import com.example.itantra.ui.screens.MainScreen
 import com.example.itantra.ui.theme.ITantraTheme
@@ -24,7 +26,9 @@ class MainActivity : ComponentActivity() {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return MainViewModel(
                     audioEngine = AndroidAudioEngine(applicationContext),
-                    speechEngine = SherpaOnnxSpeechEngine(applicationContext)
+                    speechEngine = SherpaOnnxSpeechEngine(applicationContext),
+                    ttsEngine = SherpaOnnxTtsEngine(applicationContext),
+                    transportEngine = WifiDirectTransportEngine(applicationContext)
                 ) as T
             }
         }

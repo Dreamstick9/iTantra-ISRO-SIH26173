@@ -9,9 +9,12 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicNone
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -27,22 +30,49 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.itantra.data.PttState
+import com.example.itantra.data.TransceiverState
 
+/**
+ * Tactical Single Push-To-Talk Button for iTantra Vertical Slice.
+ *
+ * Implements:
+ * 1. Prominent "PUSH TO TALK" label when idle.
+ * 2. Direct tactile press/release interaction (press down -> start recording; release -> stop, transcribe, transmit).
+ * 3. Distinct visual cues reflecting the 6 transceiver states:
+ *    - RECORDING (Vibrant Red)
+ *    - TRANSCRIBING (Amber)
+ *    - TRANSMITTING (Cyan)
+ *    - RECEIVING (Purple)
+ *    - SPEAKING (Green)
+ *    - IDLE / "PUSH TO TALK" (Tactical Primary)
+ */
 @Composable
 fun PttButton(
-    pttState: PttState,
-    isLocked: Boolean,
-    isEmergency: Boolean,
+    transceiverState: TransceiverState = TransceiverState.IDLE,
+    pttState: PttState = transceiverState.toPttState(),
+    isLocked: Boolean = false,
+    isEmergency: Boolean = false,
     onPressStart: () -> Unit,
     onPressEnd: () -> Unit,
-    onLockToggle: () -> Unit,
+    onLockToggle: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isBeingPressed by remember { mutableStateOf(false) }
-    val isActive = pttState != PttState.IDLE || isBeingPressed || isLocked
+
+    // Resolve the active transceiver state with instant press feedback
+    val effectiveState = when {
+        isBeingPressed -> TransceiverState.RECORDING
+        transceiverState != TransceiverState.IDLE -> transceiverState
+        pttState == PttState.RECORDING -> TransceiverState.RECORDING
+        pttState == PttState.PROCESSING -> TransceiverState.TRANSCRIBING
+        else -> TransceiverState.IDLE
+    }
+
+    val isActive = effectiveState != TransceiverState.IDLE || isLocked
 
     val buttonScale by animateFloatAsState(
         targetValue = if (isBeingPressed) 0.92f else 1.0f,
@@ -61,17 +91,49 @@ fun PttButton(
         label = "PttRippleProgress"
     )
 
-    val activeColor = when {
+    // Distinctive state colors: Red (Rec), Amber (STT), Cyan (TX), Purple (RX), Green (Speak)
+    val stateColor = when {
         isEmergency -> Color(0xFFFF1744)
-        pttState == PttState.PROCESSING -> Color(0xFFFFB300)
-        else -> Color(0xFF00E676)
+        effectiveState == TransceiverState.RECORDING -> Color(0xFFFF1744) // Red
+        effectiveState == TransceiverState.TRANSCRIBING -> Color(0xFFFFB300) // Amber
+        effectiveState == TransceiverState.TRANSMITTING -> Color(0xFF00E5FF) // Cyan
+        effectiveState == TransceiverState.RECEIVING -> Color(0xFFD500F9) // Purple
+        effectiveState == TransceiverState.SPEAKING -> Color(0xFF00E676) // Green
+        else -> MaterialTheme.colorScheme.primary
     }
+
     val idleColor = MaterialTheme.colorScheme.primary
     val buttonColor by animateColorAsState(
-        targetValue = if (isActive) activeColor else idleColor,
+        targetValue = if (isActive) stateColor else idleColor,
         animationSpec = tween(durationMillis = 200),
         label = "PttColor"
     )
+
+    // High contrast foreground content color
+    val contentColor = when (effectiveState) {
+        TransceiverState.RECEIVING -> Color.White
+        else -> Color.Black
+    }
+
+    // Dynamic icon for current state
+    val icon = when (effectiveState) {
+        TransceiverState.RECORDING -> Icons.Default.Mic
+        TransceiverState.TRANSCRIBING -> Icons.Default.GraphicEq
+        TransceiverState.TRANSMITTING -> Icons.Default.CellTower
+        TransceiverState.RECEIVING -> Icons.Default.Sensors
+        TransceiverState.SPEAKING -> Icons.AutoMirrored.Filled.VolumeUp
+        TransceiverState.IDLE -> if (isLocked) Icons.Default.Lock else Icons.Default.Mic
+    }
+
+    // Prominent primary button text
+    val buttonLabel = when (effectiveState) {
+        TransceiverState.RECORDING -> "RECORDING"
+        TransceiverState.TRANSCRIBING -> "TRANSCRIBING"
+        TransceiverState.TRANSMITTING -> "TRANSMITTING"
+        TransceiverState.RECEIVING -> "RECEIVING"
+        TransceiverState.SPEAKING -> "SPEAKING"
+        TransceiverState.IDLE -> if (isLocked) "LOCKED" else "PUSH TO TALK"
+    }
 
     val currentOnPressStart by rememberUpdatedState(onPressStart)
     val currentOnPressEnd by rememberUpdatedState(onPressEnd)
@@ -83,9 +145,9 @@ fun PttButton(
     ) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(200.dp)
+            modifier = Modifier.size(208.dp)
         ) {
-            // Pulsing radar ripples
+            // Pulsing radar ripples when active or recording
             if (isActive) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val maxRadius = size.minDimension / 2f
@@ -111,7 +173,7 @@ fun PttButton(
             }
 
             // Outer tactile bezel ring
-            Canvas(modifier = Modifier.size(160.dp)) {
+            Canvas(modifier = Modifier.size(164.dp)) {
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(Color(0xFF222B3D), Color(0xFF0C1017)),
@@ -121,7 +183,7 @@ fun PttButton(
                     radius = size.width / 2
                 )
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.15f),
+                    color = buttonColor.copy(alpha = if (isActive) 0.5f else 0.2f),
                     radius = size.width / 2,
                     style = Stroke(width = 2.dp.toPx())
                 )
@@ -130,7 +192,7 @@ fun PttButton(
             // Main tactile PTT Button
             Surface(
                 modifier = Modifier
-                    .size(136.dp)
+                    .size(140.dp)
                     .scale(buttonScale)
                     .shadow(elevation = if (isBeingPressed) 4.dp else 12.dp, shape = CircleShape)
                     .pointerInput(isLocked) {
@@ -155,26 +217,24 @@ fun PttButton(
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
                         Icon(
-                            imageVector = if (isActive) Icons.Default.Mic else Icons.Default.MicNone,
-                            contentDescription = "Push To Talk",
-                            tint = Color.Black,
-                            modifier = Modifier.size(46.dp)
+                            imageVector = icon,
+                            contentDescription = buttonLabel,
+                            tint = contentColor,
+                            modifier = Modifier.size(42.dp)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = when {
-                                pttState == PttState.RECORDING -> "RECORDING"
-                                pttState == PttState.PROCESSING -> "PROCESSING"
-                                isLocked -> "LOCKED"
-                                else -> "IDLE"
-                            },
-                            color = Color.Black,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 12.sp,
-                            letterSpacing = 1.sp
+                            text = buttonLabel,
+                            color = contentColor,
+                            fontWeight = FontWeight.Black,
+                            fontSize = if (effectiveState == TransceiverState.IDLE && !isLocked) 13.sp else 12.sp,
+                            textAlign = TextAlign.Center,
+                            letterSpacing = if (effectiveState == TransceiverState.IDLE) 1.1.sp else 0.8.sp,
+                            lineHeight = 15.sp
                         )
                     }
                 }
@@ -204,17 +264,22 @@ fun PttButton(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // Descriptive status cue under button
         Text(
             text = when {
                 isEmergency && isActive -> "TRANSMITTING HIGH-PRIORITY EMERGENCY SPEECH"
-                pttState == PttState.RECORDING -> "Recording 16-bit Mono PCM audio (16kHz)..."
-                pttState == PttState.PROCESSING -> "Processing & finalizing PCM buffer..."
-                isLocked -> "Hands-Free Lock Active (Tap lock to release)"
-                else -> "Hold to record audio or tap Lock badge for hands-free"
+                effectiveState == TransceiverState.RECORDING -> "Recording 16-bit Mono PCM (16kHz)... Release to send"
+                effectiveState == TransceiverState.TRANSCRIBING -> "Transcribing speech on-device (Offline STT)..."
+                effectiveState == TransceiverState.TRANSMITTING -> "Transmitting encrypted payload via Wi-Fi Direct..."
+                effectiveState == TransceiverState.RECEIVING -> "Receiving packet payload from peer device..."
+                effectiveState == TransceiverState.SPEAKING -> "Synthesizing voice & playing audio via TTS..."
+                isLocked -> "Hands-Free Lock Active (Tap lock badge to release)"
+                else -> "Press and hold to record, release to transcribe & transmit"
             },
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            color = if (isEmergency) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (isEmergency) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
         )
     }
 }

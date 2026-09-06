@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Block cleartext HTTP/HTTPS traffic to public internet by default -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Permit cleartext traffic for local Wi-Fi Direct P2P subnet (192.168.49.x) and loopback -->
+    <!-- Note: Raw java.net.Socket TCP connections are not blocked by Android's HTTP cleartext policy,
+         but this config allows local diagnostic HTTP/WebSocket servers without security policy violations. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">192.168.49.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
