@@ -78,6 +78,8 @@ fun MainScreen(
                     state = uiState.transportState,
                     connectedPeer = uiState.connectedPeer,
                     discoveredPeers = uiState.discoveredPeers,
+                    activeTransportType = uiState.activeTransportType,
+                    onSelectTransport = { viewModel.onSelectTransport(it) },
                     onStartDiscovery = { viewModel.onStartDiscovery() },
                     onStopDiscovery = { viewModel.onStopDiscovery() },
                     onConnectPeer = { viewModel.onConnectPeer(it) },

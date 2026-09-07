@@ -67,6 +67,7 @@ data class MainUiState(
     val micPermissionGranted: Boolean = false,
     val feedbackSubmitted: Boolean? = null,
     val transportState: TransportConnectionState = TransportConnectionState.DISCONNECTED,
+    val activeTransportType: com.itantra.voice.transport.TransportType = com.itantra.voice.transport.TransportType.WIFI_DIRECT,
     val discoveredPeers: List<DiscoveredPeer> = emptyList(),
     val connectedPeer: DiscoveredPeer? = null,
     val isRemoteMessage: Boolean = false
@@ -135,6 +136,16 @@ class MainViewModel(
     /** Initialises and subscribes to the peer-to-peer transport engine. */
     fun setTransportEngine(engine: TransportEngine) {
         this.transportEngine = engine
+        _uiState.update { it.copy(activeTransportType = engine.transportType) }
+
+        if (engine is com.itantra.voice.transport.CompositeTransportEngine) {
+            viewModelScope.launch {
+                engine.selectedTransport.collect { type ->
+                    _uiState.update { it.copy(activeTransportType = type) }
+                }
+            }
+        }
+
         viewModelScope.launch {
             engine.connectionState.collect { state ->
                 _uiState.update { it.copy(transportState = state) }
@@ -255,6 +266,14 @@ class MainViewModel(
 
     fun onDisconnectTransport() {
         transportEngine?.disconnect()
+    }
+
+    fun onSelectTransport(type: com.itantra.voice.transport.TransportType) {
+        val engine = transportEngine
+        if (engine is com.itantra.voice.transport.CompositeTransportEngine) {
+            engine.selectTransport(type)
+        }
+        _uiState.update { it.copy(activeTransportType = type) }
     }
 
     fun onSendTestMessage() {

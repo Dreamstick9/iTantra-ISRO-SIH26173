@@ -13,14 +13,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.itantra.voice.transport.security.WifiDirectPermissionHelper
+import com.itantra.voice.transport.CompositeTransportEngine
+import com.itantra.voice.transport.bluetooth.BluetoothTransportEngine
+import com.itantra.voice.transport.security.BluetoothPermissionHelper
 import com.itantra.voice.transport.wifidirect.WifiDirectTransportEngine
 import com.itantra.voice.ui.MainScreen
 import com.itantra.voice.ui.MainViewModel
@@ -29,7 +27,7 @@ import com.itantra.voice.ui.theme.ITantraTheme
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
-    private var transportEngine: WifiDirectTransportEngine? = null
+    private var compositeEngine: CompositeTransportEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -37,12 +35,21 @@ class MainActivity : ComponentActivity() {
         viewModel.initAudioPlayer(cacheDir)
         viewModel.initFeedbackRepository(filesDir)
 
-        val engine = WifiDirectTransportEngine(
+        val wifiEngine = WifiDirectTransportEngine(
             context = applicationContext,
             scope = lifecycleScope
         )
-        transportEngine = engine
-        viewModel.setTransportEngine(engine)
+        val bluetoothEngine = BluetoothTransportEngine(
+            context = applicationContext,
+            scope = lifecycleScope
+        )
+        val composite = CompositeTransportEngine(
+            wifiEngine = wifiEngine,
+            bluetoothEngine = bluetoothEngine,
+            scope = lifecycleScope
+        )
+        compositeEngine = composite
+        viewModel.setTransportEngine(composite)
 
         setContent {
             ITantraTheme {
@@ -54,8 +61,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(Unit) {
-                    val allRequired = WifiDirectPermissionHelper.getAllRequiredPermissions()
-                    val hasAll = WifiDirectPermissionHelper.hasAllRequiredPermissions(this@MainActivity)
+                    val allRequired = BluetoothPermissionHelper.getAllRequiredAppPermissions()
+                    val hasAll = BluetoothPermissionHelper.hasAllRequiredAppPermissions(this@MainActivity)
                     val micGranted = ContextCompat.checkSelfPermission(
                         this@MainActivity,
                         Manifest.permission.RECORD_AUDIO
@@ -71,7 +78,7 @@ class MainActivity : ComponentActivity() {
                     MainScreen(
                         viewModel = viewModel,
                         onRequirePermission = {
-                            permissionLauncher.launch(WifiDirectPermissionHelper.getAllRequiredPermissions())
+                            permissionLauncher.launch(BluetoothPermissionHelper.getAllRequiredAppPermissions())
                         },
                         modifier = Modifier
                             .fillMaxSize()
@@ -84,7 +91,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        transportEngine?.release()
+        compositeEngine?.release()
     }
 }
-

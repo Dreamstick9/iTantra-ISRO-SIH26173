@@ -1,6 +1,5 @@
 package com.itantra.voice.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,14 +18,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -47,17 +46,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.itantra.voice.transport.DiscoveredPeer
 import com.itantra.voice.transport.TransportConnectionState
+import com.itantra.voice.transport.TransportType
 
 /**
  * Compact P2P connection bar rendered on the main screen.
- * Displays real-time connection state (Disconnected, Discovering, Connecting, Connected)
- * and opens a lightweight peer selector without cluttering the screen.
+ * Displays real-time connection state for Wi-Fi Direct or Bluetooth Classic RFCOMM,
+ * and allows toggling between transport modes and connecting to peers.
  */
 @Composable
 fun P2pConnectionBar(
     state: TransportConnectionState,
     connectedPeer: DiscoveredPeer?,
     discoveredPeers: List<DiscoveredPeer>,
+    activeTransportType: TransportType = TransportType.WIFI_DIRECT,
+    onSelectTransport: (TransportType) -> Unit = {},
     onStartDiscovery: () -> Unit,
     onStopDiscovery: () -> Unit,
     onConnectPeer: (DiscoveredPeer) -> Unit,
@@ -79,13 +81,18 @@ fun P2pConnectionBar(
         label = "p2pDotColor"
     )
 
+    val currentTransportName = when (connectedPeer?.transportType ?: activeTransportType) {
+        TransportType.WIFI_DIRECT -> "Wi-Fi Direct"
+        TransportType.BLUETOOTH -> "Bluetooth"
+    }
+
     val statusText = when (state) {
-        TransportConnectionState.CONNECTED -> "CONNECTED: Wi-Fi Direct"
+        TransportConnectionState.CONNECTED -> "CONNECTED: $currentTransportName"
         TransportConnectionState.CONNECTING -> "Connecting..."
-        TransportConnectionState.DISCOVERING -> "Discovering peers..."
+        TransportConnectionState.DISCOVERING -> "Scanning ($currentTransportName)..."
         TransportConnectionState.DISCONNECTING -> "Disconnecting..."
         TransportConnectionState.ERROR -> "P2P Error"
-        TransportConnectionState.DISCONNECTED -> "Disconnected"
+        TransportConnectionState.DISCONNECTED -> "Disconnected ($currentTransportName)"
     }
 
     Surface(
@@ -215,7 +222,7 @@ fun P2pConnectionBar(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Wi-Fi Direct Peers", style = MaterialTheme.typography.titleMedium)
+                    Text("P2P Devices", style = MaterialTheme.typography.titleMedium)
                     if (state == TransportConnectionState.DISCOVERING) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     }
@@ -223,16 +230,41 @@ fun P2pConnectionBar(
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
+                    // Transport Medium Selector (Wi-Fi Direct vs Bluetooth)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = activeTransportType == TransportType.WIFI_DIRECT,
+                            onClick = {
+                                onSelectTransport(TransportType.WIFI_DIRECT)
+                                onStartDiscovery()
+                            },
+                            label = { Text("Wi-Fi Direct", fontSize = 12.sp) }
+                        )
+                        FilterChip(
+                            selected = activeTransportType == TransportType.BLUETOOTH,
+                            onClick = {
+                                onSelectTransport(TransportType.BLUETOOTH)
+                                onStartDiscovery()
+                            },
+                            label = { Text("Bluetooth", fontSize = 12.sp) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     Text(
                         text = if (state == TransportConnectionState.DISCOVERING)
-                            "Scanning for nearby iTantra devices..."
+                            "Scanning for nearby $currentTransportName peers..."
                         else
                             "Select a device to connect:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     if (discoveredPeers.isEmpty()) {
                         Box(
@@ -242,7 +274,10 @@ fun P2pConnectionBar(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No nearby iTantra peers found yet.\nEnsure Wi-Fi is enabled on both phones.",
+                                text = if (activeTransportType == TransportType.WIFI_DIRECT)
+                                    "No nearby Wi-Fi Direct peers found.\nEnsure Wi-Fi is enabled on both phones."
+                                else
+                                    "No Bluetooth peers found.\nPair devices in Bluetooth Settings or tap Rescan.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -266,11 +301,25 @@ fun P2pConnectionBar(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = peer.name,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = peer.name,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Surface(
+                                                    shape = RoundedCornerShape(3.dp),
+                                                    color = MaterialTheme.colorScheme.primaryContainer
+                                                ) {
+                                                    Text(
+                                                        text = if (peer.transportType == TransportType.WIFI_DIRECT) "Wi-Fi" else "BT",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
                                             Text(
                                                 text = peer.deviceAddress,
                                                 style = MaterialTheme.typography.labelSmall,
