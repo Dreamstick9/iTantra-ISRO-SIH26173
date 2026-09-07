@@ -121,13 +121,13 @@ class AudioRecorder(
             val bufferSize = calculateBufferSize()
             val record: NativeAudioRecord = try {
                 recordProvider?.invoke(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE,
                     CHANNEL_CONFIG,
                     AUDIO_FORMAT,
                     bufferSize
                 ) ?: DefaultNativeAudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE,
                     CHANNEL_CONFIG,
                     AUDIO_FORMAT,
@@ -194,7 +194,7 @@ class AudioRecorder(
                         }
                     }
                 } finally {
-                    safeStopAndRelease()
+                    safeReleaseRecord(record)
                 }
             }
         }
@@ -202,16 +202,48 @@ class AudioRecorder(
     }
 
     /**
-     * Stops audio recording, releases hardware resources, and returns raw captured PCM bytes.
+     * Stops audio recording, drains any trailing buffered bytes, releases hardware resources,
+     * and returns raw captured PCM bytes.
      */
     fun stopRecording(): ByteArray {
+        val recordToStop: NativeAudioRecord?
+        val jobToCancel: Job?
+
         synchronized(bufferLock) {
             isRecordingInternal.set(false)
-            recordingJob?.cancel()
+            recordToStop = activeRecord
+            jobToCancel = recordingJob
             recordingJob = null
-            safeStopAndRelease()
-            _amplitude.value = 0f
+        }
 
+        // 1. Tell AudioRecord to stop capturing new frames, preserving buffered audio
+        try {
+            if (recordToStop?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                recordToStop.stop()
+            }
+        } catch (ignored: Exception) {}
+
+        // 2. Drain any remaining unread bytes from the hardware buffer so tail speech is never truncated
+        val drainBuffer = ByteArray(2048)
+        try {
+            while (recordToStop != null) {
+                val drained = recordToStop.read(drainBuffer, 0, drainBuffer.size)
+                if (drained > 0) {
+                    synchronized(bufferLock) {
+                        currentBuffer.write(drainBuffer, 0, drained)
+                    }
+                } else {
+                    break
+                }
+            }
+        } catch (ignored: Exception) {}
+
+        // 3. Cancel the background streaming coroutine and safely release the record
+        jobToCancel?.cancel()
+        safeReleaseRecord(recordToStop)
+
+        synchronized(bufferLock) {
+            _amplitude.value = 0f
             val capturedBytes = currentBuffer.toByteArray()
             currentBuffer.reset()
             return capturedBytes
@@ -225,9 +257,9 @@ class AudioRecorder(
         stopRecording()
     }
 
-    private fun safeStopAndRelease() {
+    private fun safeReleaseRecord(record: NativeAudioRecord?) {
         try {
-            activeRecord?.apply {
+            record?.apply {
                 if (recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     stop()
                 }
@@ -235,9 +267,13 @@ class AudioRecorder(
             }
         } catch (ignored: Exception) {
         } finally {
-            activeRecord = null
-            isRecordingInternal.set(false)
-            _amplitude.value = 0f
+            synchronized(bufferLock) {
+                if (activeRecord === record) {
+                    activeRecord = null
+                    isRecordingInternal.set(false)
+                    _amplitude.value = 0f
+                }
+            }
         }
     }
 }
