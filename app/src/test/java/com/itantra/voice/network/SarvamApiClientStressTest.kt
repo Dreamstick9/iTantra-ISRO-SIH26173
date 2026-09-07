@@ -354,10 +354,10 @@ class SarvamApiClientStressTest {
     @Test
     fun testTtsVariousSpeakersAndIndicScripts() = runTest {
         val testCases = listOf(
-            Triple("तटीय क्षेत्र में भीषण चक्रवात", "hi-IN", "meera"),
-            Triple("Evacuate sector four immediately", "en-IN", "arvind"),
+            Triple("तटीय क्षेत्र में भीषण चक्रवात", "hi-IN", "priya"),
+            Triple("Evacuate sector four immediately", "en-IN", "aditya"),
             Triple("எனக்கு கடுமையான காய்ச்சல் உள்ளது", "ta-IN", "ratan"),
-            Triple("પીવાના પાણીની તાત્કાલિક જરૂર છે", "gu-IN", "aditi")
+            Triple("પીવાના પાણીની તાત્કાલિક જરૂર છે", "gu-IN", "kavya")
         )
 
         for ((text, lang, speaker) in testCases) {

@@ -95,7 +95,7 @@ class SarvamApiClientTest {
         val result = apiClient.synthesize(
             text = "Coastal area warning",
             targetLang = "en-IN",
-            speaker = "meera"
+            speaker = "priya"
         )
 
         assertTrue("Synthesize must succeed", result.isSuccess)

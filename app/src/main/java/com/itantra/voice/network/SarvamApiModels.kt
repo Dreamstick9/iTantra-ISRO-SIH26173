@@ -41,7 +41,7 @@ data class TranslationResponse(
 data class TtsRequest(
     @SerialName("inputs") val inputs: List<String>,
     @SerialName("target_language_code") val target_language_code: String,
-    @SerialName("speaker") val speaker: String = "meera",
+    @SerialName("speaker") val speaker: String = "priya",
     @SerialName("model") val model: String = "bulbul:v3",
     @SerialName("speech_sample_rate") val speech_sample_rate: Int = 16000
 ) {

@@ -101,7 +101,7 @@ class SarvamMockContractTest {
         {
             "inputs": ["Hello world"],
             "target_language_code": "en-IN",
-            "speaker": "meera",
+            "speaker": "priya",
             "model": "bulbul:v3",
             "speech_sample_rate": 16000
         }

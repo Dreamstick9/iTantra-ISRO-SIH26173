@@ -48,6 +48,14 @@ class SarvamApiClient(
 
     companion object {
         const val AUTH_HEADER = "api-subscription-key"
+        const val DEFAULT_SPEAKER = "priya"
+        val SUPPORTED_SPEAKERS = listOf(
+            "aditya", "ritu", "ashutosh", "priya", "neha", "rahul", "pooja", "rohan",
+            "simran", "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun",
+            "manan", "sumit", "roopa", "kabir", "aayan", "shubh", "advait", "anand",
+            "tanya", "tarun", "sunny", "mani", "gokul", "vijay", "shruti", "suhani",
+            "mohit", "kavitha", "rehan", "soham", "rupali"
+        )
         private val PLACEHOLDERS = listOf(
             "YOUR_API_KEY_HERE",
             "your_sarvam_api_key_here",
@@ -194,12 +202,12 @@ class SarvamApiClient(
      *
      * @param text Input text to speak
      * @param targetLang BCP-47 target language code
-     * @param speaker Speaker voice name (default: "meera")
+     * @param speaker Speaker voice name (default: "priya")
      */
     suspend fun synthesize(
         text: String,
         targetLang: String,
-        speaker: String = "meera"
+        speaker: String = DEFAULT_SPEAKER
     ): Result<TtsResponse> = withContext(ioDispatcher) {
         if (text.isBlank()) {
             return@withContext Result.failure(

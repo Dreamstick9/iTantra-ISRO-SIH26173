@@ -72,7 +72,7 @@ class Tier4RealWorldScenarioTest {
             .url("https://api.sarvam.ai/text-to-speech")
             .header("api-subscription-key", "test-key")
             .post(
-                """{"inputs":["$translatedText"],"target_language_code":"${targetLang.bcp47Code}","speaker":"meera","model":"bulbul:v3"}"""
+                """{"inputs":["$translatedText"],"target_language_code":"${targetLang.bcp47Code}","speaker":"priya","model":"bulbul:v3"}"""
                     .toRequestBody("application/json".toMediaType())
             ).build()
         val ttsRes = client.newCall(ttsReq).execute()

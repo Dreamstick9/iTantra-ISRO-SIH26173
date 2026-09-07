@@ -75,7 +75,7 @@ class Tier3CrossFeatureTest {
             .header("api-subscription-key", "test-key")
             .header("Content-Type", "application/json")
             .post(
-                """{"inputs":["मुझे तेज बुखार और सिरदर्द है"],"target_language_code":"${targetLang.bcp47Code}","speaker":"meera","model":"bulbul:v3"}"""
+                """{"inputs":["मुझे तेज बुखार और सिरदर्द है"],"target_language_code":"${targetLang.bcp47Code}","speaker":"priya","model":"bulbul:v3"}"""
                     .toRequestBody("application/json".toMediaType())
             ).build()
 
