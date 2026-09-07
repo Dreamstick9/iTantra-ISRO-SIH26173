@@ -102,6 +102,7 @@ dependencies {
     // Local Unit Tests
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.test.core)
 
     // Instrumented Tests
     androidTestImplementation(libs.androidx.test.core)

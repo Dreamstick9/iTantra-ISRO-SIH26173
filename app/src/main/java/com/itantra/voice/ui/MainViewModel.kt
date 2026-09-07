@@ -8,7 +8,13 @@ import com.itantra.voice.audio.WavEncoder
 import com.itantra.voice.data.Language
 import com.itantra.voice.feedback.FeedbackRepository
 import com.itantra.voice.network.SarvamApiClient
+import com.itantra.voice.transport.DiscoveredPeer
+import com.itantra.voice.transport.TransportConnectionState
+import com.itantra.voice.transport.TransportEngine
+import com.itantra.voice.transport.TransportMessage
+import com.itantra.voice.transport.TransportMessageType
 import kotlinx.coroutines.CoroutineDispatcher
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +46,7 @@ data class LatencyStats(
     val sttMs: Long = 0L,
     val translateMs: Long = 0L,
     val ttsMs: Long = 0L,
+    val netMs: Long? = null,
     val totalMs: Long = 0L
 )
 
@@ -58,7 +65,11 @@ data class MainUiState(
     val amplitude: Float = 0f,
     val isHolding: Boolean = false,
     val micPermissionGranted: Boolean = false,
-    val feedbackSubmitted: Boolean? = null
+    val feedbackSubmitted: Boolean? = null,
+    val transportState: TransportConnectionState = TransportConnectionState.DISCONNECTED,
+    val discoveredPeers: List<DiscoveredPeer> = emptyList(),
+    val connectedPeer: DiscoveredPeer? = null,
+    val isRemoteMessage: Boolean = false
 ) {
     val isBusy: Boolean
         get() = state in listOf(PttState.TRANSCRIBING, PttState.TRANSLATING, PttState.SYNTHESIZING)
@@ -72,11 +83,13 @@ class MainViewModel(
     private val audioRecorder: AudioRecorder = AudioRecorder(),
     private val sarvamApiClient: SarvamApiClient = SarvamApiClient(),
     audioPlayer: AudioPlayer? = null,
+    transportEngine: TransportEngine? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val timeProvider: () -> Long = { System.currentTimeMillis() }
 ) : ViewModel() {
 
     private var audioPlayer: AudioPlayer? = audioPlayer
+    private var transportEngine: TransportEngine? = transportEngine
     private var feedbackRepository: FeedbackRepository? = null
     private var pressStartTimeMs: Long = 0L
     private var pipelineJob: Job? = null
@@ -84,9 +97,9 @@ class MainViewModel(
     var cachedAudioBase64: String? = null
         private set
 
-
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
 
     init {
         viewModelScope.launch {
@@ -98,7 +111,9 @@ class MainViewModel(
                 }
             }
         }
+        transportEngine?.let { setTransportEngine(it) }
     }
+
 
     fun initAudioPlayer(cacheDir: File) {
         if (this.audioPlayer == null) {
@@ -116,6 +131,161 @@ class MainViewModel(
     fun setAudioPlayer(player: AudioPlayer) {
         this.audioPlayer = player
     }
+
+    /** Initialises and subscribes to the peer-to-peer transport engine. */
+    fun setTransportEngine(engine: TransportEngine) {
+        this.transportEngine = engine
+        viewModelScope.launch {
+            engine.connectionState.collect { state ->
+                _uiState.update { it.copy(transportState = state) }
+            }
+        }
+        viewModelScope.launch {
+            engine.discoveredPeers.collect { peers ->
+                _uiState.update { it.copy(discoveredPeers = peers) }
+            }
+        }
+        viewModelScope.launch {
+            engine.connectedPeer.collect { peer ->
+                _uiState.update { it.copy(connectedPeer = peer) }
+            }
+        }
+        viewModelScope.launch {
+            engine.incomingMessages.collect { message ->
+                handleIncomingRemoteMessage(message)
+            }
+        }
+    }
+
+    private fun handleIncomingRemoteMessage(message: TransportMessage) {
+        val netDuration = (timeProvider() - message.timestamp).coerceAtLeast(0)
+        _uiState.update {
+            it.copy(
+                sourceTranscript = "[Received] ${message.text}",
+                translatedText = message.text,
+                targetLanguage = Language.fromBcp47(message.targetLanguage) ?: it.targetLanguage,
+                isRemoteMessage = true,
+                latencies = it.latencies.copy(netMs = netDuration, totalMs = netDuration)
+            )
+        }
+
+        // Gate 8: Phone B automatically speaks the received translated text using the EXISTING TTS implementation
+        speakReceivedTranslation(
+            text = message.text,
+            targetLangCode = message.targetLanguage
+        )
+    }
+
+    private fun speakReceivedTranslation(text: String, targetLangCode: String) {
+        viewModelScope.launch(ioDispatcher) {
+            _uiState.update { it.copy(state = PttState.SYNTHESIZING) }
+            val ttsStart = timeProvider()
+            val ttsResult = sarvamApiClient.synthesize(
+                text = text,
+                targetLang = targetLangCode
+            )
+            val ttsDuration = (timeProvider() - ttsStart).coerceAtLeast(0)
+
+            val ttsResponse = ttsResult.getOrElse { error ->
+                _uiState.update {
+                    it.copy(
+                        state = PttState.ERROR,
+                        errorMessage = error.message ?: "Speech synthesis failed"
+                    )
+                }
+                return@launch
+            }
+
+            val base64Audio = ttsResponse.audios.firstOrNull()
+            if (base64Audio.isNullOrBlank()) {
+                _uiState.update {
+                    it.copy(
+                        state = PttState.IDLE,
+                        errorMessage = "Speech synthesis failed: empty audio"
+                    )
+                }
+                return@launch
+            }
+
+            cachedAudioBase64 = base64Audio
+            _uiState.update {
+                it.copy(
+                    state = PttState.PLAYING,
+                    hasAudioToReplay = true
+                )
+            }
+
+            val player = audioPlayer
+            if (player != null) {
+                player.playBase64Wav(
+                    base64Wav = base64Audio,
+                    onComplete = {
+                        _uiState.update {
+                            it.copy(state = PttState.IDLE, hasAudioToReplay = true)
+                        }
+                    },
+                    onError = { playbackError ->
+                        _uiState.update {
+                            it.copy(
+                                state = PttState.ERROR,
+                                errorMessage = playbackError.message ?: "Audio playback error"
+                            )
+                        }
+                    }
+                )
+            } else {
+                _uiState.update {
+                    it.copy(state = PttState.IDLE, hasAudioToReplay = true)
+                }
+            }
+        }
+    }
+
+    fun onStartDiscovery() {
+        transportEngine?.startDiscovery()
+    }
+
+    fun onStopDiscovery() {
+        transportEngine?.stopDiscovery()
+    }
+
+    fun onConnectPeer(peer: DiscoveredPeer) {
+        transportEngine?.connect(peer)
+    }
+
+    fun onDisconnectTransport() {
+        transportEngine?.disconnect()
+    }
+
+    fun onSendTestMessage() {
+        val engine = transportEngine ?: return
+        if (engine.connectionState.value != TransportConnectionState.CONNECTED) return
+
+        viewModelScope.launch(ioDispatcher) {
+            val current = _uiState.value
+            val testMsg = TransportMessage.createTestMessage(
+                sourceLang = current.sourceLanguage.bcp47Code,
+                targetLang = current.targetLanguage.bcp47Code
+            )
+            val netStart = timeProvider()
+            val result = engine.send(testMsg)
+            val netDuration = (timeProvider() - netStart).coerceAtLeast(0)
+            if (result.isSuccess) {
+                _uiState.update {
+                    it.copy(
+                        latencies = it.latencies.copy(netMs = netDuration),
+                        translatedText = testMsg.text,
+                        isRemoteMessage = false
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(errorMessage = "Failed to send test message: ${result.exceptionOrNull()?.message}")
+                }
+            }
+        }
+    }
+
 
     /**
      * User pressed and holds Push-to-Talk button.
@@ -272,11 +442,30 @@ class MainViewModel(
             }
 
             val translated = transResponse.translatedText.trim()
+
+            // P2P Transport transmission (Phone A -> Phone B)
+            var netDuration: Long? = null
+            val engine = transportEngine
+            if (engine != null && engine.connectionState.value == TransportConnectionState.CONNECTED) {
+                val transportMsg = TransportMessage(
+                    type = TransportMessageType.TRANSLATION,
+                    sourceLanguage = sourceLang.bcp47Code,
+                    targetLanguage = targetLang.bcp47Code,
+                    text = translated
+                )
+                val netStart = timeProvider()
+                val sendResult = engine.send(transportMsg)
+                if (sendResult.isSuccess) {
+                    netDuration = (timeProvider() - netStart).coerceAtLeast(0)
+                }
+            }
+
             _uiState.update {
                 it.copy(
                     state = PttState.SYNTHESIZING,
                     translatedText = translated,
-                    latencies = LatencyStats(sttMs = sttDuration, translateMs = transDuration)
+                    isRemoteMessage = false,
+                    latencies = LatencyStats(sttMs = sttDuration, translateMs = transDuration, netMs = netDuration)
                 )
             }
 
@@ -287,13 +476,15 @@ class MainViewModel(
                 targetLang = targetLang.bcp47Code
             )
             val ttsDuration = (timeProvider() - ttsStart).coerceAtLeast(0)
-            val totalDuration = sttDuration + transDuration + ttsDuration
+            val totalDuration = sttDuration + transDuration + ttsDuration + (netDuration ?: 0L)
             val finalLatencies = LatencyStats(
                 sttMs = sttDuration,
                 translateMs = transDuration,
                 ttsMs = ttsDuration,
+                netMs = netDuration,
                 totalMs = totalDuration
             )
+
 
             val ttsResponse = ttsResult.getOrElse { error ->
                 _uiState.update {

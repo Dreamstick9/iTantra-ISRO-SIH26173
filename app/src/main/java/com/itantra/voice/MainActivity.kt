@@ -19,6 +19,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.itantra.voice.transport.security.WifiDirectPermissionHelper
+import com.itantra.voice.transport.wifidirect.WifiDirectTransportEngine
 import com.itantra.voice.ui.MainScreen
 import com.itantra.voice.ui.MainViewModel
 import com.itantra.voice.ui.theme.ITantraTheme
@@ -26,6 +29,7 @@ import com.itantra.voice.ui.theme.ITantraTheme
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+    private var transportEngine: WifiDirectTransportEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -33,38 +37,41 @@ class MainActivity : ComponentActivity() {
         viewModel.initAudioPlayer(cacheDir)
         viewModel.initFeedbackRepository(filesDir)
 
+        val engine = WifiDirectTransportEngine(
+            context = applicationContext,
+            scope = lifecycleScope
+        )
+        transportEngine = engine
+        viewModel.setTransportEngine(engine)
+
         setContent {
             ITantraTheme {
-                var hasRecordAudioPermission by remember {
-                    mutableStateOf(
-                        ContextCompat.checkSelfPermission(
-                            this@MainActivity,
-                            Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
-                    )
-                }
-
                 val permissionLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.RequestPermission()
-                ) { isGranted ->
-                    hasRecordAudioPermission = isGranted
-                    viewModel.onPermissionResult(isGranted)
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { permissions ->
+                    val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
+                    viewModel.onPermissionResult(micGranted)
                 }
 
                 LaunchedEffect(Unit) {
-                    val isGranted = ContextCompat.checkSelfPermission(
+                    val allRequired = WifiDirectPermissionHelper.getAllRequiredPermissions()
+                    val hasAll = WifiDirectPermissionHelper.hasAllRequiredPermissions(this@MainActivity)
+                    val micGranted = ContextCompat.checkSelfPermission(
                         this@MainActivity,
                         Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED
-                    hasRecordAudioPermission = isGranted
-                    viewModel.onPermissionResult(isGranted)
+                    viewModel.onPermissionResult(micGranted)
+
+                    if (!hasAll) {
+                        permissionLauncher.launch(allRequired)
+                    }
                 }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MainScreen(
                         viewModel = viewModel,
                         onRequirePermission = {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            permissionLauncher.launch(WifiDirectPermissionHelper.getAllRequiredPermissions())
                         },
                         modifier = Modifier
                             .fillMaxSize()
@@ -74,4 +81,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        transportEngine?.release()
+    }
 }
+

@@ -22,7 +22,9 @@ import androidx.compose.ui.unit.dp
 import com.itantra.voice.ui.components.AppHeader
 import com.itantra.voice.ui.components.ErrorBanner
 import com.itantra.voice.ui.components.LanguageSelectorSection
+import com.itantra.voice.ui.components.P2pConnectionBar
 import com.itantra.voice.ui.components.PttButton
+
 import com.itantra.voice.ui.components.QuickFeedbackBar
 import com.itantra.voice.ui.components.TelemetryBar
 import com.itantra.voice.ui.components.TextCardsSection
@@ -70,13 +72,27 @@ fun MainScreen(
 
                 TelemetryBar(latencies = uiState.latencies)
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
+
+                P2pConnectionBar(
+                    state = uiState.transportState,
+                    connectedPeer = uiState.connectedPeer,
+                    discoveredPeers = uiState.discoveredPeers,
+                    onStartDiscovery = { viewModel.onStartDiscovery() },
+                    onStopDiscovery = { viewModel.onStopDiscovery() },
+                    onConnectPeer = { viewModel.onConnectPeer(it) },
+                    onDisconnect = { viewModel.onDisconnectTransport() },
+                    onSendTestMessage = { viewModel.onSendTestMessage() }
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
 
                 ErrorBanner(
                     errorMessage = uiState.errorMessage,
                     onDismiss = { viewModel.onDismissError() },
                     onRetryPermission = onRequirePermission
                 )
+
 
                 Spacer(modifier = Modifier.height(8.dp))
 

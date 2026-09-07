@@ -39,9 +39,14 @@ fun TelemetryBar(
             TelemetryMetric(label = "Trans", valueMs = latencies.translateMs)
             Text(text = "|", color = MaterialTheme.colorScheme.outlineVariant)
             TelemetryMetric(label = "TTS", valueMs = latencies.ttsMs)
+            if (latencies.netMs != null) {
+                Text(text = "|", color = MaterialTheme.colorScheme.outlineVariant)
+                TelemetryMetric(label = "NET", valueMs = latencies.netMs)
+            }
             Text(text = "|", color = MaterialTheme.colorScheme.outlineVariant)
             TelemetryMetric(label = "Total", valueMs = latencies.totalMs, isTotal = true)
         }
+
     }
 }
 

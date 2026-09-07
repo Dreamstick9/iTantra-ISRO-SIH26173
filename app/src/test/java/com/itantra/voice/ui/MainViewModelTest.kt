@@ -9,8 +9,21 @@ import com.itantra.voice.audio.NativeMediaPlayer
 import com.itantra.voice.data.Language
 import com.itantra.voice.fixtures.SarvamMockFixtures
 import com.itantra.voice.network.SarvamApiClient
+import com.itantra.voice.transport.DiscoveredPeer
+import com.itantra.voice.transport.TransportConnectionState
+import com.itantra.voice.transport.TransportEngine
+import com.itantra.voice.transport.TransportMessage
+import com.itantra.voice.transport.TransportMessageType
+import com.itantra.voice.transport.TransportType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -171,15 +184,17 @@ class MainViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun createViewModel(): MainViewModel {
+    private fun createViewModel(transportEngine: TransportEngine? = null): MainViewModel {
         return MainViewModel(
             audioRecorder = audioRecorder,
             sarvamApiClient = sarvamApiClient,
             audioPlayer = audioPlayer,
+            transportEngine = transportEngine,
             ioDispatcher = testDispatcher,
             timeProvider = { mockCurrentTime }
         )
     }
+
 
     private fun executePttHold(viewModel: MainViewModel, durationMs: Long = 600L) {
         val start = mockCurrentTime
@@ -531,4 +546,109 @@ class MainViewModelTest {
         audioRecorder.stopRecording()
         advanceUntilIdle()
     }
+
+    private class FakeTransportEngine(
+        initialState: TransportConnectionState = TransportConnectionState.DISCONNECTED
+    ) : TransportEngine {
+        override val transportType: TransportType = TransportType.WIFI_DIRECT
+        private val _state = MutableStateFlow(initialState)
+        override val connectionState: StateFlow<TransportConnectionState> = _state.asStateFlow()
+
+        private val _peers = MutableStateFlow<List<DiscoveredPeer>>(emptyList())
+        override val discoveredPeers: StateFlow<List<DiscoveredPeer>> = _peers.asStateFlow()
+
+        private val _peer = MutableStateFlow<DiscoveredPeer?>(null)
+        override val connectedPeer: StateFlow<DiscoveredPeer?> = _peer.asStateFlow()
+
+        val incomingChannel = MutableSharedFlow<TransportMessage>(replay = 1, extraBufferCapacity = 16)
+        override val incomingMessages: Flow<TransportMessage> = incomingChannel.asSharedFlow()
+
+        val sentMessages = mutableListOf<TransportMessage>()
+
+        fun setState(state: TransportConnectionState) { _state.value = state }
+        fun setPeers(peers: List<DiscoveredPeer>) { _peers.value = peers }
+
+        override fun startDiscovery() { _state.value = TransportConnectionState.DISCOVERING }
+        override fun stopDiscovery() { _state.value = TransportConnectionState.DISCONNECTED }
+        override fun connect(peer: DiscoveredPeer) {
+            _state.value = TransportConnectionState.CONNECTED
+            _peer.value = peer
+        }
+        override fun disconnect() {
+            _state.value = TransportConnectionState.DISCONNECTED
+            _peer.value = null
+        }
+        override suspend fun send(message: TransportMessage): Result<Unit> {
+            sentMessages.add(message)
+            return Result.success(Unit)
+        }
+        override fun release() { disconnect() }
+    }
+
+    @Test
+    fun testTransportEngineLifecycleAndDiscovery() = runTest {
+        val transport = FakeTransportEngine()
+        val viewModel = createViewModel(transportEngine = transport)
+
+        assertEquals(TransportConnectionState.DISCONNECTED, viewModel.uiState.value.transportState)
+
+        viewModel.onStartDiscovery()
+        testScheduler.runCurrent()
+        assertEquals(TransportConnectionState.DISCOVERING, viewModel.uiState.value.transportState)
+
+        val peer = DiscoveredPeer("id1", "Phone-B", "02:00:00:00:00:00")
+        transport.setPeers(listOf(peer))
+        testScheduler.runCurrent()
+        assertEquals(1, viewModel.uiState.value.discoveredPeers.size)
+        assertEquals("Phone-B", viewModel.uiState.value.discoveredPeers.first().name)
+
+        viewModel.onConnectPeer(peer)
+        testScheduler.runCurrent()
+        assertEquals(TransportConnectionState.CONNECTED, viewModel.uiState.value.transportState)
+        assertEquals(peer, viewModel.uiState.value.connectedPeer)
+
+        viewModel.onDisconnectTransport()
+        testScheduler.runCurrent()
+        assertEquals(TransportConnectionState.DISCONNECTED, viewModel.uiState.value.transportState)
+        assertNull(viewModel.uiState.value.connectedPeer)
+    }
+
+    @Test
+    fun testSendTestMessageTransmitsHelloFromItantra() = runTest {
+        val transport = FakeTransportEngine(initialState = TransportConnectionState.CONNECTED)
+        val viewModel = createViewModel(transportEngine = transport)
+
+        viewModel.onSendTestMessage()
+        testScheduler.runCurrent()
+
+        assertEquals(1, transport.sentMessages.size)
+        val sent = transport.sentMessages.first()
+        assertEquals("HELLO FROM ITANTRA", sent.text)
+        assertEquals(Language.DEFAULT_SOURCE.bcp47Code, sent.sourceLanguage)
+        assertEquals(Language.DEFAULT_TARGET.bcp47Code, sent.targetLanguage)
+        assertEquals("HELLO FROM ITANTRA", viewModel.uiState.value.translatedText)
+        assertNotNull(viewModel.uiState.value.latencies.netMs)
+    }
+
+    @Test
+    fun testIncomingRemoteMessageUpdatesUiAndTriggersTts() = runTest {
+        val transport = FakeTransportEngine(initialState = TransportConnectionState.CONNECTED)
+        val viewModel = createViewModel(transportEngine = transport)
+
+        val incoming = TransportMessage(
+            sourceLanguage = "hi-IN",
+            targetLanguage = "en-IN",
+            text = "Emergency alert: evacuate coastal sector",
+            type = TransportMessageType.ALERT
+        )
+
+        transport.incomingChannel.emit(incoming)
+        testScheduler.runCurrent()
+        advanceUntilIdle()
+
+        assertEquals("Emergency alert: evacuate coastal sector", viewModel.uiState.value.translatedText)
+        assertTrue(viewModel.uiState.value.isRemoteMessage)
+        assertEquals(Language.ENGLISH, viewModel.uiState.value.targetLanguage)
+    }
 }
+
