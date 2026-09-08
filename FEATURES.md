@@ -232,7 +232,7 @@ Light and dark themes both supported.
 ## Verified
 
 ```
-unit           255 tests  0 failures  [PASS]
+unit           258 tests  0 failures  [PASS]
 instrumented    10 tests  0 failures  [PASS]
 lint clean
 ```

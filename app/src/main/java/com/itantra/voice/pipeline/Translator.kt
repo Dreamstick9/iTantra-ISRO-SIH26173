@@ -2,6 +2,7 @@ package com.itantra.voice.pipeline
 
 import com.itantra.voice.data.Language
 import com.itantra.voice.network.SarvamApiClient
+import okhttp3.OkHttpClient
 
 /**
  * Text translation, separated from the speech engine.
@@ -55,9 +56,19 @@ object PassThroughTranslator : Translator {
  * translate between Indic languages when a Sarvam key is also configured.
  */
 class SarvamTranslator(
-    private val client: SarvamApiClient = SarvamApiClient(),
-    private val apiKeyProvider: () -> String = { com.itantra.voice.BuildConfig.SARVAM_API_KEY }
+    private val apiKeyProvider: () -> String = { com.itantra.voice.BuildConfig.SARVAM_API_KEY },
+    customHttpClient: OkHttpClient? = null
 ) : Translator {
+
+    // Built from the same provider as isAvailable() so the two can never disagree.
+    // They used to be independent constructor parameters: MainActivity passed the
+    // runtime key as apiKeyProvider while `client` silently defaulted to one reading
+    // BuildConfig.SARVAM_API_KEY — empty in a distributed APK. isAvailable() said yes,
+    // every real request then failed with "key is missing".
+    private val client = SarvamApiClient(
+        apiKeyProvider = apiKeyProvider,
+        customClient = customHttpClient
+    )
 
     override val displayName: String = "Sarvam"
 

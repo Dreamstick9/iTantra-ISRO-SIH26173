@@ -10,7 +10,7 @@ and the receiving handset speaks it aloud.
 | Platform | Android 8.0+ (minSdk 26, targetSdk 35) |
 | Language | Kotlin 2.3, Jetpack Compose |
 | Build | Gradle 9.1, AGP 9.0.1, JDK 17 toolchain |
-| Tests | 255 unit, 10 instrumented |
+| Tests | 258 unit, 10 instrumented |
 
 > **What can it do?** [`FEATURES.md`](FEATURES.md) — every feature, how it works, and how
 > to demo it.
@@ -182,7 +182,7 @@ Everything runs headless — no human interaction, no physical device.
 
 | Suite | Count | Covers |
 |---|---|---|
-| Unit (`app/src/test`) | 255 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
+| Unit (`app/src/test`) | 258 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
 | Instrumented (`app/src/androidTest`) | 10 | Real Compose tree on an emulator: gestures, transcript rendering, language swap, emergency arming, permission gating |
 
 Both suites inject fakes at the `NativeAudioRecord` / `NativeMediaPlayer` / `SpeechPipeline`

@@ -3,6 +3,7 @@ package com.itantra.voice.pipeline
 import android.util.Base64
 import com.itantra.voice.data.Language
 import com.itantra.voice.network.SarvamApiClient
+import okhttp3.OkHttpClient
 import java.util.logging.Logger
 
 /**
@@ -13,10 +14,17 @@ import java.util.logging.Logger
  * as a higher-accuracy alternative for demos rather than as the default.
  */
 class SarvamSpeechPipeline(
-    private val client: SarvamApiClient = SarvamApiClient(),
     private val apiKeyProvider: () -> String = { com.itantra.voice.BuildConfig.SARVAM_API_KEY },
+    customHttpClient: OkHttpClient? = null,
     private val base64Decoder: (String) -> ByteArray = { Base64.decode(it, Base64.DEFAULT) }
 ) : SpeechPipeline {
+
+    // Derived from apiKeyProvider rather than accepted separately, so a runtime-entered
+    // key reaches the wire. See SarvamTranslator for the bug this closes.
+    private val client = SarvamApiClient(
+        apiKeyProvider = apiKeyProvider,
+        customClient = customHttpClient
+    )
 
     private val log = Logger.getLogger("SarvamSpeechPipeline")
 
