@@ -12,6 +12,10 @@ and the receiving handset speaks it aloud.
 | Build | Gradle 9.1, AGP 9.0.1, JDK 17 toolchain |
 | Tests | 201 unit, 7 instrumented |
 
+> **Migrating from an older checkout of this project?** Read
+> [`HANDOFF.md`](HANDOFF.md) — it covers where to pull the new code from, the breaking
+> API changes, and how to run the tests.
+
 ---
 
 ## The problem

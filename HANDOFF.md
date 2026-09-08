@@ -1,14 +1,91 @@
 # Handoff: what changed, and how to drive it
 
 You are picking this up from the **pre-refactor codebase**. This document is the bridge.
-It covers what moved, what broke and why, the new APIs, and how to run and test everything.
+It covers where to get the new code, what moved, what broke and why, the new APIs, and how
+to run and test everything.
 
 Read `docs/ARCHITECTURE_NOTES.md` for the *why* behind each design decision. This file is
 the *what* and the *how*.
 
 ---
 
+## 0. Where this code lives — get it first
+
+All of the work described below is on a **fork**, not on the original repository:
+
+| | |
+|---|---|
+| **Fork (has everything)** | `https://github.com/Dreamstick9/iTantra-ISRO-SIH26173` |
+| Upstream (the old code you have) | `https://github.com/Spirit019/iTantra-ISRO-SIH26173` |
+| Branch | `main`, and identically `fix/offline-pipeline-and-ui-redesign` |
+
+The fork's `main` is a **fast-forward** of upstream `main` — no history was rewritten and
+no commits were dropped, so it merges cleanly. It builds directly on the last commit you
+already have:
+
+```
+...      docs commits (this file)
+d4456b9  fix: make the transceiver work offline, fix concurrency bugs, redesign the UI
+7a13e4b  feat(transport): implement Phase A Wi-Fi Direct P2P transport   <- your HEAD
+```
+
+`d4456b9` is the one that matters: every code change and bug fix in this document is in
+it. 73 files, +4286 / -2392.
+
+### If you have a clone already (recommended)
+
+Add the fork as a second remote and fast-forward. Because it is a descendant of what you
+have, this is a clean merge with no conflicts:
+
+```bash
+git remote add itantra-fixed https://github.com/Dreamstick9/iTantra-ISRO-SIH26173.git
+git fetch itantra-fixed
+git log --oneline HEAD..itantra-fixed/main     # see exactly what is incoming
+git merge itantra-fixed/main                    # fast-forward
+```
+
+To review before taking it:
+
+```bash
+git diff HEAD..itantra-fixed/main --stat        # 73 files changed
+git diff HEAD..itantra-fixed/main -- app/src/main/java/com/itantra/voice/ui/MainViewModel.kt
+```
+
+### If you want a fresh clone
+
+```bash
+git clone https://github.com/Dreamstick9/iTantra-ISRO-SIH26173.git
+cd iTantra-ISRO-SIH26173
+```
+
+### If you only want specific fixes
+
+Every bug in §9 is in the single commit `d4456b9`, so `git cherry-pick` is all-or-nothing.
+To take one fix in isolation, read the relevant section here, then pull just that file:
+
+```bash
+git checkout itantra-fixed/main -- app/src/main/java/com/itantra/voice/audio/AudioRecorder.kt
+```
+
+Be careful doing that: the changes are **interdependent**. Taking `MainViewModel.kt` without
+the `pipeline/` package will not compile, and taking `AudioRecorder.kt` alone changes
+`stopRecording()` to `suspend` and will break every caller (§3.1). Merging the whole branch
+is strongly preferred.
+
+### First thing to do after you have it
+
+```bash
+./run-tests.sh          # expect: unit 201 passed, lint clean
+```
+
+If that passes, you have a working tree. §7 covers the setup this needs (JDK 17 + 21, SDK
+packages, `local.properties`) — **do that first if the command fails**, the failure is
+almost always toolchain, not code.
+
+---
+
 ## 1. The one-paragraph summary
+
 
 The app could not function. Every speech call went to Sarvam's cloud API keyed by
 `SARVAM_API_KEY`, which is git-ignored and absent, so the auth interceptor rejected every
