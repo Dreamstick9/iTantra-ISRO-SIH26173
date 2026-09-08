@@ -75,7 +75,7 @@ is strongly preferred.
 ### First thing to do after you have it
 
 ```bash
-./run-tests.sh          # expect: unit 234 passed, lint clean
+./run-tests.sh          # expect: unit 250 passed, lint clean
 ```
 
 If that passes, you have a working tree. §7 covers the setup this needs (JDK 17 + 21, SDK
@@ -148,7 +148,7 @@ implementations** — a fully offline on-device engine and the original Sarvam c
 (several concurrency) are fixed, the emergency-alert feature is wired up (it was dead
 code), and the UI is rebuilt on a two-colour system.
 
-Tests went 186 → **234 unit + 10 instrumented**, all passing, lint clean.
+Tests went 186 → **250 unit + 10 instrumented**, all passing, lint clean.
 See [`FEATURES.md`](FEATURES.md) for the full feature list including sender location.
 
 ---
@@ -477,7 +477,7 @@ sarvam.api.key=
 Expected:
 
 ```
-  unit            234 tests  0 failures  0 errors   [PASS]
+  unit            250 tests  0 failures  0 errors   [PASS]
   instrumented     10 tests  0 failures  0 errors   [PASS]
 ```
 
@@ -518,6 +518,7 @@ The seams to inject at:
 | Microphone | `NativeAudioRecord` | `AudioRecorder(recordProvider = { ... })` |
 | Speaker | `NativeMediaPlayer` | `AudioPlayer(cacheDir, playerFactory = { ... })` |
 | Speech engine | `SpeechPipeline` | `MainViewModel(speechPipeline = ...)` |
+| Translation | `Translator` | `ElevenLabsSpeechPipeline(translator = ...)` |
 | Transport | `TransportEngine` | `MainViewModel(transportEngine = ...)` |
 | Alarm volume | `AlarmVolumeController` | `AudioPlayer(alarmVolumeController = ...)` |
 | Clock | `() -> Long` | `MainViewModel(timeProvider = { fixedTime })` |

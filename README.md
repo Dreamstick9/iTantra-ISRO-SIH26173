@@ -10,7 +10,7 @@ and the receiving handset speaks it aloud.
 | Platform | Android 8.0+ (minSdk 26, targetSdk 35) |
 | Language | Kotlin 2.3, Jetpack Compose |
 | Build | Gradle 9.1, AGP 9.0.1, JDK 17 toolchain |
-| Tests | 234 unit, 10 instrumented |
+| Tests | 250 unit, 10 instrumented |
 
 > **What can it do?** [`FEATURES.md`](FEATURES.md) — every feature, how it works, and how
 > to demo it.
@@ -75,9 +75,14 @@ push-to-talk flow drives either implementation:
 - **`OnDeviceSpeechPipeline` (default).** Platform `SpeechRecognizer` with
   `EXTRA_PREFER_OFFLINE`, plus the platform `TextToSpeech` engine rendering to WAV. No
   network, no API key. This is the configuration SIH26173 mandates.
-- **`SarvamSpeechPipeline` (opt-in).** Sarvam AI's Saaras/Mayura/Bulbul APIs. Higher
-  accuracy and real translation between Indic languages, but requires a key and a network,
-  which the problem statement does not permit for a submission.
+- **`ElevenLabsSpeechPipeline` (opt-in).** Scribe `scribe_v2` for recognition (90+
+  languages) and Flash v2.5 / v3 for voice, returning 16 kHz WAV. ElevenLabs has no
+  text-translation endpoint, so translation is delegated to a separate `Translator`.
+- **`SarvamSpeechPipeline` (opt-in).** Sarvam AI's Saaras/Mayura/Bulbul APIs. Also supplies
+  `SarvamTranslator`, which is what translates for the ElevenLabs pipeline.
+
+Cloud engines require a key and a network, which the problem statement does not permit for
+a submission — hence offline by default.
 
 `FallbackSpeechPipeline` picks between them, and the choice comes from **configuration**
 rather than a runtime probe — `SpeechRecognizer.isRecognitionAvailable()` is true on any
@@ -128,8 +133,11 @@ org.gradle.java.installations.paths=/opt/homebrew/opt/openjdk@17/libexec/openjdk
 ```properties
 sdk.dir=/Users/you/Library/Android/sdk
 
-# Set a key and the Sarvam cloud engine leads (no offline language pack needed).
-# Leave blank and the app runs entirely on the offline on-device engine.
+# ElevenLabs: speech recognition and voice. Preferred cloud engine.
+elevenlabs.api.key=
+
+# Sarvam: supplies TRANSLATION even when ElevenLabs is the speech engine, because
+# ElevenLabs has no text-translation endpoint. Also works as a full engine on its own.
 sarvam.api.key=
 
 # Set true to pin the offline engine even if a key is present.
@@ -139,11 +147,13 @@ itantra.force.offline=false
 
 Which engine runs:
 
-| `sarvam.api.key` | `itantra.force.offline` | Engine | Offline pack needed? | Network needed? |
+| Keys set | `itantra.force.offline` | Engine | Offline pack needed? | Network needed? |
 |---|---|---|---|---|
-| set | `false` | Sarvam Cloud | No | Yes |
-| blank | `false` | On-device | Yes | No |
-| anything | `true` | On-device, pinned | Yes | No |
+| ElevenLabs | `false` | ElevenLabs | No | Yes |
+| Sarvam only | `false` | Sarvam Cloud | No | Yes |
+| both | `false` | ElevenLabs for speech, Sarvam for translation | No | Yes |
+| none | `false` | On-device | Yes | No |
+| any | `true` | On-device, pinned | Yes | No |
 
 The active engine is shown in the status line at the top of the screen.
 
@@ -172,7 +182,7 @@ Everything runs headless — no human interaction, no physical device.
 
 | Suite | Count | Covers |
 |---|---|---|
-| Unit (`app/src/test`) | 234 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
+| Unit (`app/src/test`) | 250 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
 | Instrumented (`app/src/androidTest`) | 10 | Real Compose tree on an emulator: gestures, transcript rendering, language swap, emergency arming, permission gating |
 
 Both suites inject fakes at the `NativeAudioRecord` / `NativeMediaPlayer` / `SpeechPipeline`
@@ -216,7 +226,7 @@ internally so the button stays anchored on every screen size.
 | Sender location attached to messages | Done — GNSS, fully offline, < 40 bytes |
 | Latency telemetry | Done — per-stage readout on screen |
 | Fully offline, no cloud API | Done by default; cloud path exists but is opt-in |
-| On-device translation between Indic languages | **Not done** — offline path relays text verbatim |
+| On-device translation between Indic languages | **Not done** — offline path relays text verbatim; ElevenLabs has no text-translation API either, so translation needs a Sarvam key |
 | VAD / automatic sentence segmentation | **Not done** — capture is push-to-talk only |
 | Bluetooth RFCOMM transport | **Not done** — `TransportEngine` is ready for it; only Wi-Fi Direct is implemented |
 

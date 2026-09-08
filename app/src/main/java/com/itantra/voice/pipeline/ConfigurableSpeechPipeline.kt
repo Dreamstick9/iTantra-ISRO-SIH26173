@@ -1,7 +1,6 @@
 package com.itantra.voice.pipeline
 
 import com.itantra.voice.data.Language
-import com.itantra.voice.network.SarvamApiClient
 import kotlinx.coroutines.flow.StateFlow
 import java.util.logging.Logger
 
@@ -19,7 +18,7 @@ import java.util.logging.Logger
  *
  * Precedence, highest first:
  *  1. [preferOffline] — operator pinned the offline engine
- *  2. a usable key from [keyProvider] — cloud engine
+ *  2. the first entry of [cloudEngines] whose key is configured
  *  3. otherwise — offline engine
  *
  * Resolution happens in [prepare] rather than per call because [capturesOwnAudio] must be
@@ -29,10 +28,19 @@ import java.util.logging.Logger
  */
 class ConfigurableSpeechPipeline(
     private val onDevice: SpeechPipeline,
-    private val cloud: SpeechPipeline,
-    private val keyProvider: () -> String,
+    private val cloudEngines: List<CloudEngine>,
     private val preferOffline: () -> Boolean
 ) : SpeechPipeline {
+
+    /**
+     * A cloud engine paired with the check that says whether it is configured.
+     *
+     * Ordered by preference at construction: the first engine with a usable key wins.
+     */
+    data class CloudEngine(
+        val pipeline: SpeechPipeline,
+        val hasUsableKey: () -> Boolean
+    )
 
     private val log = Logger.getLogger("ConfigurableSpeechPipeline")
 
@@ -45,8 +53,7 @@ class ConfigurableSpeechPipeline(
     override suspend fun prepare() {
         val next = when {
             preferOffline() -> onDevice
-            !SarvamApiClient.isPlaceholderKey(keyProvider()) -> cloud
-            else -> onDevice
+            else -> cloudEngines.firstOrNull { it.hasUsableKey() }?.pipeline ?: onDevice
         }
         next.prepare()
         if (next !== resolved) log.info("Speech engine resolved to ${next.displayName}")
@@ -75,6 +82,6 @@ class ConfigurableSpeechPipeline(
 
     override fun release() {
         onDevice.release()
-        cloud.release()
+        cloudEngines.forEach { it.pipeline.release() }
     }
 }

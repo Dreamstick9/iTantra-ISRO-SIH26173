@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +36,7 @@ import com.itantra.voice.ui.theme.Signal
 
 const val ENGINE_SHEET_TAG = "engine_sheet"
 const val ENGINE_KEY_FIELD_TAG = "engine_key_field"
+const val ENGINE_SARVAM_FIELD_TAG = "engine_sarvam_field"
 const val ENGINE_SAVE_TAG = "engine_save"
 
 /**
@@ -49,13 +52,15 @@ const val ENGINE_SAVE_TAG = "engine_save"
 @Composable
 fun EngineSheet(
     currentEngine: String,
-    savedKey: String,
+    savedElevenLabsKey: String,
+    savedSarvamKey: String,
     preferOffline: Boolean,
-    onSave: (key: String, preferOffline: Boolean) -> Unit,
+    onSave: (elevenLabsKey: String, sarvamKey: String, preferOffline: Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var keyText by remember { mutableStateOf(savedKey) }
+    var elevenKeyText by remember { mutableStateOf(savedElevenLabsKey) }
+    var sarvamKeyText by remember { mutableStateOf(savedSarvamKey) }
     var offline by remember { mutableStateOf(preferOffline) }
 
     ModalBottomSheet(
@@ -67,6 +72,9 @@ fun EngineSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // Two key fields plus the toggle overflow a short screen, so the sheet
+                // scrolls rather than burying the SAVE button off-screen.
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp)
         ) {
@@ -117,28 +125,55 @@ fun EngineSheet(
             Spacer(Modifier.height(20.dp))
 
             Text(
-                text = "Sarvam API key",
+                text = "ElevenLabs API key",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Optional. Set this to use the cloud engine when no offline voice pack is installed.",
+                text = "Speech recognition and voice. Use this when no offline voice pack is installed.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(10.dp))
 
             OutlinedTextField(
-                value = keyText,
-                onValueChange = { keyText = it },
+                value = elevenKeyText,
+                onValueChange = { elevenKeyText = it },
                 singleLine = true,
                 enabled = !offline,
-                placeholder = { Text("paste key") },
+                placeholder = { Text("paste ElevenLabs key") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(ENGINE_KEY_FIELD_TAG)
+            )
+
+            Spacer(Modifier.height(18.dp))
+
+            Text(
+                text = "Sarvam API key",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "Only needed to translate between languages. ElevenLabs has no text-translation API, so without this the message is relayed in the language it was spoken.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+
+            OutlinedTextField(
+                value = sarvamKeyText,
+                onValueChange = { sarvamKeyText = it },
+                singleLine = true,
+                enabled = !offline,
+                placeholder = { Text("paste Sarvam key (optional)") },
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag(ENGINE_KEY_FIELD_TAG)
+                    .testTag(ENGINE_SARVAM_FIELD_TAG)
             )
 
             Spacer(Modifier.height(16.dp))
@@ -155,7 +190,7 @@ fun EngineSheet(
                     )
                 }
                 TextButton(
-                    onClick = { onSave(keyText, offline) },
+                    onClick = { onSave(elevenKeyText, sarvamKeyText, offline) },
                     modifier = Modifier.testTag(ENGINE_SAVE_TAG)
                 ) {
                     Text(

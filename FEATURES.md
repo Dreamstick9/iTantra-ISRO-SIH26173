@@ -44,21 +44,50 @@ translation under `SPEAKING`, and the phone speaks it.
 
 ---
 
-## 2. Two speech engines, switchable in the app
+## 2. Three speech engines, switchable in the app
 
-| | Offline (on-device) | Sarvam Cloud |
-|---|---|---|
-| Recognition | platform `SpeechRecognizer`, `EXTRA_PREFER_OFFLINE` | Saaras v3 |
-| Translation | **pass-through** (see limits) | Mayura v1 |
-| Synthesis | platform `TextToSpeech` → WAV | Bulbul v3 |
-| Needs network | No | Yes |
-| Needs an offline voice pack | Yes | No |
+| | Offline (on-device) | ElevenLabs | Sarvam Cloud |
+|---|---|---|---|
+| Recognition | platform `SpeechRecognizer`, `EXTRA_PREFER_OFFLINE` | Scribe `scribe_v2`, 90+ languages | Saaras v3 |
+| Translation | **pass-through** | **via Sarvam** (see below) | Mayura v1 |
+| Synthesis | platform `TextToSpeech` → WAV | Flash v2.5 (~75 ms) / v3 | Bulbul v3 |
+| Needs network | No | Yes | Yes |
+| Needs an offline voice pack | Yes | No | No |
 
-Both sit behind one `SpeechPipeline` interface, so the state machine never learns which is
-running. The active engine is shown at the top-right of the screen.
+All three sit behind one `SpeechPipeline` interface, so the state machine never learns
+which is running. The active engine is shown at the top-right of the screen.
 
-**Switching:** tap the engine name → paste a Sarvam key → **SAVE**. No rebuild. The key is
-stored app-privately on that device and is not in the APK.
+**Switching:** tap the engine name → paste a key → **SAVE**. No rebuild. Keys are stored
+app-privately on that device and are not in the APK.
+
+**Precedence:** force-offline → ElevenLabs (if keyed) → Sarvam (if keyed) → offline.
+
+### ElevenLabs specifics
+
+- **Recognition** uses `scribe_v2`, which covers 90+ languages — all ten of ours.
+- **Synthesis** picks the fastest model that supports the target language:
+  `eleven_flash_v2_5` at **~75 ms** for English, Hindi, Bengali, Tamil, Telugu, Kannada and
+  Malayalam; `eleven_v3` (70+ languages) for Marathi, Gujarati and Odia. Latency is scored
+  at 20% in the brief, so the fast model is preferred wherever it works rather than
+  defaulting to the broad one.
+- **Audio format** is requested as `wav_16000` — 16 kHz mono WAV, matching the app's own
+  capture rate and arriving with a RIFF header, so it flows straight into the player with
+  no transcoding and no base64 hop.
+- **Voice selection** is not hardcoded. On first use the app calls `GET /v2/voices` and
+  adopts the first voice on your account, so it works with any account. Override it by
+  setting a voice id in settings.
+- **Language codes** are sent as ISO 639-1 (`hi`), not BCP-47 (`hi-IN`), which is what the
+  API expects.
+
+> **ElevenLabs cannot translate text.** They expose no text-translation endpoint — their
+> only translation lives inside the *Dubbing* project API, which is asynchronous and
+> job-based (create a project, add target languages, poll for completion) and cannot serve
+> a push-to-talk loop scored on latency.
+>
+> So translation is a separate `Translator` in this app. Add a **Sarvam key alongside**
+> the ElevenLabs one and ElevenLabs handles recognition and voice while Sarvam handles
+> translation. With no Sarvam key the message is relayed in the language it was spoken —
+> the transceiver still works, it just does not translate.
 
 **Force offline:** the same sheet has a switch that pins the offline engine. For a
 provably air-gapped build, set `itantra.force.offline=true` in `local.properties` — then
@@ -199,7 +228,7 @@ Light and dark themes both supported.
 ## Verified
 
 ```
-unit           234 tests  0 failures  [PASS]
+unit           250 tests  0 failures  [PASS]
 instrumented    10 tests  0 failures  [PASS]
 lint clean
 ```
@@ -207,7 +236,9 @@ lint clean
 `./run-tests.sh --device` runs everything headless, booting an emulator if none is
 attached. No test needs a microphone, a speaker, a network or a second handset — fakes are
 injected at the `NativeAudioRecord`, `NativeMediaPlayer`, `SpeechPipeline`,
-`TransportEngine` and `LocationProvider` seams.
+`TransportEngine` and `LocationProvider` seams. The ElevenLabs client's actual outgoing requests — endpoint,
+auth header, model ids, output format — are asserted against a capturing interceptor,
+because a wrong endpoint fails identically to a network outage at runtime.
 
 ---
 
@@ -215,7 +246,7 @@ injected at the `NativeAudioRecord`, `NativeMediaPlayer`, `SpeechPipeline`,
 
 | | |
 |---|---|
-| **Offline translation** | The offline engine relays recognised text **verbatim**; it does not translate. No open-source on-device Indic translation model is bundled. Cross-language translation needs the Sarvam key. |
+| **Translation needs Sarvam** | Neither the offline engine nor ElevenLabs can translate text. The offline engine bundles no Indic translation model; ElevenLabs has no text-translation endpoint. Cross-language translation requires a Sarvam key, which can sit alongside an ElevenLabs key. |
 | **Two-phone pairing** | Never run on real hardware (see §5). |
 | **Offline voice packs** | The offline engine needs one installed for your language. Many phones ship without Hindi. If you have none, use a Sarvam key. |
 | **No VAD** | Push-to-talk only. The brief also describes STT activating "after detecting pauses and stoppages"; that is not implemented. |

@@ -27,6 +27,23 @@ class SettingsStore(context: Context) {
             prefs.edit().putString(KEY_SARVAM, value.trim()).apply()
         }
 
+    /** Runtime-entered ElevenLabs key, or empty when none has been set. */
+    var elevenLabsKey: String
+        get() = prefs.getString(KEY_ELEVENLABS, "").orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_ELEVENLABS, value.trim()).apply()
+        }
+
+    /**
+     * Optional ElevenLabs voice id. Blank means "use the first voice on the account",
+     * which avoids hardcoding an id that may not exist for a given user.
+     */
+    var elevenLabsVoiceId: String
+        get() = prefs.getString(KEY_ELEVENLABS_VOICE, "").orEmpty()
+        set(value) {
+            prefs.edit().putString(KEY_ELEVENLABS_VOICE, value.trim()).apply()
+        }
+
     /**
      * Pins the offline engine regardless of any configured key.
      *
@@ -47,6 +64,8 @@ class SettingsStore(context: Context) {
     private companion object {
         const val PREFS_NAME = "itantra_settings"
         const val KEY_SARVAM = "sarvam_api_key"
+        const val KEY_ELEVENLABS = "elevenlabs_api_key"
+        const val KEY_ELEVENLABS_VOICE = "elevenlabs_voice_id"
         const val KEY_PREFER_OFFLINE = "prefer_offline"
     }
 }

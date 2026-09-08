@@ -20,6 +20,10 @@ import androidx.lifecycle.lifecycleScope
 import com.itantra.voice.audio.AudioPlayer
 import com.itantra.voice.audio.SystemAlarmVolumeController
 import com.itantra.voice.location.GpsLocationProvider
+import com.itantra.voice.network.ElevenLabsApiClient
+import com.itantra.voice.network.SarvamApiClient
+import com.itantra.voice.pipeline.ElevenLabsSpeechPipeline
+import com.itantra.voice.pipeline.SarvamTranslator
 import com.itantra.voice.pipeline.ConfigurableSpeechPipeline
 import com.itantra.voice.pipeline.OnDeviceSpeechPipeline
 import com.itantra.voice.pipeline.SarvamSpeechPipeline
@@ -113,10 +117,12 @@ class MainActivity : ComponentActivity() {
                         // A compile-time offline build has no cloud client to configure,
                         // so the settings affordance is hidden entirely.
                         engineSettings = if (BuildConfig.FORCE_OFFLINE) null else EngineSettings(
-                            savedKey = { settings.sarvamKey },
+                            savedElevenLabsKey = { settings.elevenLabsKey },
+                            savedSarvamKey = { settings.sarvamKey },
                             preferOffline = { settings.preferOffline },
-                            save = { key, offline ->
-                                settings.sarvamKey = key
+                            save = { elevenKey, sarvamKey, offline ->
+                                settings.elevenLabsKey = elevenKey
+                                settings.sarvamKey = sarvamKey
                                 settings.preferOffline = offline
                             }
                         ),
@@ -163,14 +169,35 @@ class MainActivity : ComponentActivity() {
 
         // A key entered in the app wins over one baked in at build time, so a single
         // distributed APK works for an operator who has a key but no offline voice pack.
-        val resolveKey = {
-            settings.sarvamKey.ifBlank { BuildConfig.SARVAM_API_KEY }
-        }
+        val sarvamKey = { settings.sarvamKey.ifBlank { BuildConfig.SARVAM_API_KEY } }
+        val elevenKey = { settings.elevenLabsKey.ifBlank { BuildConfig.ELEVENLABS_API_KEY } }
+
+        // ElevenLabs has no text-translation endpoint, so translation is sourced
+        // separately. With a Sarvam key present the ElevenLabs pipeline still translates
+        // between Indic languages; without one it relays the recognised text verbatim.
+        val translator = SarvamTranslator(apiKeyProvider = sarvamKey)
+
+        val elevenLabs = ElevenLabsSpeechPipeline(
+            client = ElevenLabsApiClient(apiKeyProvider = elevenKey),
+            apiKeyProvider = elevenKey,
+            translator = translator,
+            voiceIdProvider = { settings.elevenLabsVoiceId }
+        )
 
         return ConfigurableSpeechPipeline(
             onDevice = onDevice,
-            cloud = SarvamSpeechPipeline(apiKeyProvider = resolveKey),
-            keyProvider = resolveKey,
+            // ElevenLabs first: it is the account the operator has credits on. Sarvam
+            // remains available and is what supplies translation for either engine.
+            cloudEngines = listOf(
+                ConfigurableSpeechPipeline.CloudEngine(
+                    pipeline = elevenLabs,
+                    hasUsableKey = { !ElevenLabsApiClient.isPlaceholderKey(elevenKey()) }
+                ),
+                ConfigurableSpeechPipeline.CloudEngine(
+                    pipeline = SarvamSpeechPipeline(apiKeyProvider = sarvamKey),
+                    hasUsableKey = { !SarvamApiClient.isPlaceholderKey(sarvamKey()) }
+                )
+            ),
             preferOffline = { settings.preferOffline }
         ).also { speechPipeline = it }
     }

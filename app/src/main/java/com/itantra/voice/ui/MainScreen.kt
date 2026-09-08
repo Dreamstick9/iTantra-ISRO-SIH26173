@@ -39,9 +39,10 @@ import com.itantra.voice.ui.components.TranscriptPanel
  * case there is nothing to configure and the affordance is hidden.
  */
 data class EngineSettings(
-    val savedKey: () -> String,
+    val savedElevenLabsKey: () -> String,
+    val savedSarvamKey: () -> String,
     val preferOffline: () -> Boolean,
-    val save: (key: String, preferOffline: Boolean) -> Unit
+    val save: (elevenLabsKey: String, sarvamKey: String, preferOffline: Boolean) -> Unit
 )
 
 /**
@@ -168,10 +169,11 @@ fun MainScreen(
     if (showEngine && engineSettings != null) {
         EngineSheet(
             currentEngine = uiState.engineName,
-            savedKey = engineSettings.savedKey(),
+            savedElevenLabsKey = engineSettings.savedElevenLabsKey(),
+            savedSarvamKey = engineSettings.savedSarvamKey(),
             preferOffline = engineSettings.preferOffline(),
-            onSave = { key, offline ->
-                engineSettings.save(key, offline)
+            onSave = { elevenKey, sarvamKey, offline ->
+                engineSettings.save(elevenKey, sarvamKey, offline)
                 viewModel.refreshEngine()
                 showEngine = false
             },

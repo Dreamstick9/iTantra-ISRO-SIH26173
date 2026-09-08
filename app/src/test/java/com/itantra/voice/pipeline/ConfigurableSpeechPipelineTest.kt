@@ -49,8 +49,12 @@ class ConfigurableSpeechPipelineTest {
     private fun pipeline(key: String, forceOffline: Boolean = false, od: Stub = offline(), cl: Stub = cloud()) =
         ConfigurableSpeechPipeline(
             onDevice = od,
-            cloud = cl,
-            keyProvider = { key },
+            cloudEngines = listOf(
+                ConfigurableSpeechPipeline.CloudEngine(
+                    pipeline = cl,
+                    hasUsableKey = { !com.itantra.voice.network.SarvamApiClient.isPlaceholderKey(key) }
+                )
+            ),
             preferOffline = { forceOffline }
         )
 
@@ -95,8 +99,12 @@ class ConfigurableSpeechPipelineTest {
         var key = ""
         val p = ConfigurableSpeechPipeline(
             onDevice = offline(),
-            cloud = cloud(),
-            keyProvider = { key },
+            cloudEngines = listOf(
+                ConfigurableSpeechPipeline.CloudEngine(
+                    pipeline = cloud(),
+                    hasUsableKey = { !com.itantra.voice.network.SarvamApiClient.isPlaceholderKey(key) }
+                )
+            ),
             preferOffline = { false }
         )
 
@@ -122,6 +130,53 @@ class ConfigurableSpeechPipelineTest {
 
         assertEquals(0, od.beginCaptureCount)
         assertEquals(1, cl.beginCaptureCount)
+    }
+
+    @Test
+    fun `the first configured cloud engine wins`() = runTest {
+        val eleven = Stub("ElevenLabs", PipelineMode.CLOUD, capturesOwnAudio = false)
+        val sarvam = Stub("Sarvam Cloud", PipelineMode.CLOUD, capturesOwnAudio = false)
+
+        val p = ConfigurableSpeechPipeline(
+            onDevice = offline(),
+            cloudEngines = listOf(
+                ConfigurableSpeechPipeline.CloudEngine(eleven) { true },
+                ConfigurableSpeechPipeline.CloudEngine(sarvam) { true }
+            ),
+            preferOffline = { false }
+        )
+        p.prepare()
+        assertEquals("ElevenLabs", p.displayName)
+    }
+
+    @Test
+    fun `an unconfigured engine is skipped for the next one`() = runTest {
+        val eleven = Stub("ElevenLabs", PipelineMode.CLOUD, capturesOwnAudio = false)
+        val sarvam = Stub("Sarvam Cloud", PipelineMode.CLOUD, capturesOwnAudio = false)
+
+        val p = ConfigurableSpeechPipeline(
+            onDevice = offline(),
+            cloudEngines = listOf(
+                ConfigurableSpeechPipeline.CloudEngine(eleven) { false },
+                ConfigurableSpeechPipeline.CloudEngine(sarvam) { true }
+            ),
+            preferOffline = { false }
+        )
+        p.prepare()
+        assertEquals("Sarvam Cloud", p.displayName)
+    }
+
+    @Test
+    fun `no configured cloud engine falls back to offline`() = runTest {
+        val p = ConfigurableSpeechPipeline(
+            onDevice = offline(),
+            cloudEngines = listOf(
+                ConfigurableSpeechPipeline.CloudEngine(cloud()) { false }
+            ),
+            preferOffline = { false }
+        )
+        p.prepare()
+        assertEquals("On-device", p.displayName)
     }
 
     @Test
