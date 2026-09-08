@@ -10,11 +10,12 @@ and the receiving handset speaks it aloud.
 | Platform | Android 8.0+ (minSdk 26, targetSdk 35) |
 | Language | Kotlin 2.3, Jetpack Compose |
 | Build | Gradle 9.1, AGP 9.0.1, JDK 17 toolchain |
-| Tests | 205 unit, 7 instrumented |
+| Tests | 234 unit, 10 instrumented |
 
-> **Migrating from an older checkout of this project?** Read
-> [`HANDOFF.md`](HANDOFF.md) — it covers where to pull the new code from, the breaking
-> API changes, and how to run the tests.
+> **What can it do?** [`FEATURES.md`](FEATURES.md) — every feature, how it works, and how
+> to demo it.
+> **Migrating from an older checkout?** [`HANDOFF.md`](HANDOFF.md) — where to pull the new
+> code from, the breaking API changes, and how to run the tests.
 
 ---
 
@@ -171,8 +172,8 @@ Everything runs headless — no human interaction, no physical device.
 
 | Suite | Count | Covers |
 |---|---|---|
-| Unit (`app/src/test`) | 205 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
-| Instrumented (`app/src/androidTest`) | 7 | Real Compose tree on an emulator: gestures, transcript rendering, language swap, emergency arming, permission gating |
+| Unit (`app/src/test`) | 234 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
+| Instrumented (`app/src/androidTest`) | 10 | Real Compose tree on an emulator: gestures, transcript rendering, language swap, emergency arming, permission gating |
 
 Both suites inject fakes at the `NativeAudioRecord` / `NativeMediaPlayer` / `SpeechPipeline`
 seams, so no test needs a microphone, a speaker, a network, or a second handset.
@@ -212,6 +213,7 @@ internally so the button stays anchored on every screen size.
 | Push-to-talk transceiver over Wi-Fi | Done — Wi-Fi Direct + persistent framed TCP |
 | Text-sized payload over the link | Done — UTF-8 text, typically < 100 bytes |
 | Alerts at max volume, non-interruptible | Done — `USAGE_ALARM`, alarm stream forced to max |
+| Sender location attached to messages | Done — GNSS, fully offline, < 40 bytes |
 | Latency telemetry | Done — per-stage readout on screen |
 | Fully offline, no cloud API | Done by default; cloud path exists but is opt-in |
 | On-device translation between Indic languages | **Not done** — offline path relays text verbatim |

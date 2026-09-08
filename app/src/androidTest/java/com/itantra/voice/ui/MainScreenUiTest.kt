@@ -16,6 +16,11 @@ import com.itantra.voice.audio.NativeAudioRecord
 import com.itantra.voice.audio.NativeMediaPlayer
 import com.itantra.voice.audio.WavEncoder
 import com.itantra.voice.data.Language
+import com.itantra.voice.location.GeoPoint
+import com.itantra.voice.location.LocationProvider
+import com.itantra.voice.ui.components.LOCATION_TOGGLE_TAG
+import com.itantra.voice.ui.components.SENDER_LOCATION_TAG
+import kotlinx.coroutines.runBlocking
 import com.itantra.voice.pipeline.PipelineMode
 import com.itantra.voice.pipeline.SpeechPipeline
 import com.itantra.voice.pipeline.SynthesisResult
@@ -36,6 +41,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -109,6 +116,8 @@ class MainScreenUiTest {
             sent.add(message)
             return Result.success(Unit)
         }
+
+        suspend fun deliver(message: TransportMessage) = channel.emit(message)
         override fun release() = disconnect()
     }
 
@@ -278,5 +287,103 @@ class MainScreenUiTest {
         // The press must not start a capture without the permission.
         assertEquals(PttState.IDLE, viewModel.uiState.value.state)
         composeRule.onNodeWithTag(NOTICE_BAR_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun receivedMessageShowsSenderPositionAndOfflineBearing() {
+        val engine = FakeTransport(TransportConnectionState.CONNECTED)
+        val viewModel = launchScreen(transportEngine = engine)
+
+        // This handset is in Mumbai; the sender is ~1 km away.
+        val here = GeoPoint(19.0759837, 72.8776559)
+        val there = GeoPoint(19.0849837, 72.8776559)
+        viewModel.setLocationProvider(FixedLocationProvider(here))
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            viewModel.uiState.value.ownLocation != null
+        }
+
+        runBlocking {
+            engine.deliver(
+                TransportMessage.withLocation(
+                    TransportMessage(
+                        sourceLanguage = "hi-IN",
+                        targetLanguage = "en-IN",
+                        text = "Need water"
+                    ),
+                    there
+                )
+            )
+        }
+
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            viewModel.uiState.value.senderLocation != null
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag(SENDER_LOCATION_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText(there.format()).assertIsDisplayed()
+
+        // Distance and bearing are computed on-device from the two fixes, with no map
+        // data and no network. 0.009 degrees of latitude is very close to 1 km due north.
+        val bearing = viewModel.uiState.value.bearingToSender
+        assertNotNull(bearing)
+        assertTrue("expected a northerly bearing, got $bearing", bearing!!.endsWith("N"))
+        assertTrue("expected ~1 km, got $bearing", bearing.startsWith("1.0 km"))
+    }
+
+    @Test
+    fun transmissionCarriesThisHandsetsPositionWhenSharingIsOn() {
+        val engine = FakeTransport(TransportConnectionState.CONNECTED)
+        val viewModel = launchScreen(transportEngine = engine)
+
+        val here = GeoPoint(19.0759837, 72.8776559)
+        viewModel.setLocationProvider(FixedLocationProvider(here))
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            viewModel.uiState.value.ownLocation != null
+        }
+
+        composeRule.onNodeWithTag(TALK_BUTTON_TAG).performTouchInput { down(center) }
+        Thread.sleep(400)
+        composeRule.onNodeWithTag(TALK_BUTTON_TAG).performTouchInput { up() }
+
+        composeRule.waitUntil(timeoutMillis = 10_000) { engine.sent.isNotEmpty() }
+
+        val sent = engine.sent.first()
+        assertTrue("transmission must carry a position", sent.hasLocation)
+        assertEquals(here.latitude, sent.senderLocation()!!.latitude, 0.00001)
+        assertEquals(here.longitude, sent.senderLocation()!!.longitude, 0.00001)
+    }
+
+    @Test
+    fun turningLocationSharingOffStripsThePositionFromTransmissions() {
+        val engine = FakeTransport(TransportConnectionState.CONNECTED)
+        val viewModel = launchScreen(transportEngine = engine)
+        viewModel.setLocationProvider(FixedLocationProvider(GeoPoint(19.0759837, 72.8776559)))
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            viewModel.uiState.value.ownLocation != null
+        }
+
+        composeRule.onNodeWithTag(LOCATION_TOGGLE_TAG).performClick()
+        composeRule.waitForIdle()
+        assertFalse(viewModel.uiState.value.locationSharingEnabled)
+
+        composeRule.onNodeWithTag(TALK_BUTTON_TAG).performTouchInput { down(center) }
+        Thread.sleep(400)
+        composeRule.onNodeWithTag(TALK_BUTTON_TAG).performTouchInput { up() }
+
+        composeRule.waitUntil(timeoutMillis = 10_000) { engine.sent.isNotEmpty() }
+        assertFalse(
+            "position must not be transmitted once sharing is off",
+            engine.sent.first().hasLocation
+        )
+    }
+
+    /** Location source returning a single fixed position, for deterministic tests. */
+    private class FixedLocationProvider(fix: GeoPoint) : LocationProvider {
+        override val currentFix = MutableStateFlow<GeoPoint?>(fix)
+        override fun isAvailable() = true
+        override fun start() = Unit
+        override fun stop() = Unit
     }
 }

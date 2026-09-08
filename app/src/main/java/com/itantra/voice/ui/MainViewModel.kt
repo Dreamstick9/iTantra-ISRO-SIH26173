@@ -7,6 +7,9 @@ import com.itantra.voice.audio.AudioRecorder
 import com.itantra.voice.audio.WavEncoder
 import com.itantra.voice.data.Language
 import com.itantra.voice.feedback.FeedbackRepository
+import com.itantra.voice.location.GeoPoint
+import com.itantra.voice.location.LocationProvider
+import com.itantra.voice.location.NoLocationProvider
 import com.itantra.voice.pipeline.SpeechPipeline
 import com.itantra.voice.transport.DiscoveredPeer
 import com.itantra.voice.transport.TransportConnectionState
@@ -75,8 +78,29 @@ data class MainUiState(
     /** Name of the engine serving requests, e.g. "On-device" or "Sarvam Cloud". */
     val engineName: String = "",
     /** True while an incoming ALERT is being announced. */
-    val isAlertPlaying: Boolean = false
+    val isAlertPlaying: Boolean = false,
+    /** This device's own GNSS fix, or null before one is acquired. */
+    val ownLocation: GeoPoint? = null,
+    /** Position carried by the last received message, or null if it had none. */
+    val senderLocation: GeoPoint? = null,
+    /** True when location is being attached to outgoing transmissions. */
+    val locationSharingEnabled: Boolean = true
 ) {
+    /**
+     * Distance and compass bearing from here to the sender, e.g. `1.2 km NE`.
+     *
+     * Computed on-device from the two fixes, so it needs no map data and no network.
+     * Null unless both positions are known.
+     */
+    val bearingToSender: String?
+        get() {
+            val here = ownLocation ?: return null
+            val there = senderLocation ?: return null
+            val metres = here.distanceMetresTo(there)
+            val compass = GeoPoint.compassPoint(here.bearingDegreesTo(there))
+            return "${GeoPoint.formatDistance(metres)} $compass"
+        }
+
     /** True while a pipeline stage is in flight and input must be rejected. */
     val isBusy: Boolean
         get() = state == PttState.TRANSCRIBING ||
@@ -101,11 +125,13 @@ class MainViewModel(
     private var speechPipeline: SpeechPipeline? = null,
     audioPlayer: AudioPlayer? = null,
     transportEngine: TransportEngine? = null,
+    locationProvider: LocationProvider = NoLocationProvider,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val timeProvider: () -> Long = { System.currentTimeMillis() }
 ) : ViewModel() {
 
     private var audioPlayer: AudioPlayer? = audioPlayer
+    private var locationProvider: LocationProvider = locationProvider
     private var transportEngine: TransportEngine? = null
     private var feedbackRepository: FeedbackRepository? = null
     private var pressStartTimeMs: Long = 0L
@@ -124,6 +150,38 @@ class MainViewModel(
         }
         speechPipeline?.let { setSpeechPipeline(it) }
         transportEngine?.let { setTransportEngine(it) }
+
+        viewModelScope.launch {
+            locationProvider.currentFix.collect { fix ->
+                _uiState.update { it.copy(ownLocation = fix) }
+            }
+        }
+    }
+
+    /**
+     * Installs the position source. Separate from construction because the production
+     * provider needs an Android Context, which the ViewModel must not hold.
+     */
+    fun setLocationProvider(provider: LocationProvider) {
+        if (locationProvider === provider) return
+        locationProvider = provider
+        viewModelScope.launch {
+            provider.currentFix.collect { fix ->
+                _uiState.update { it.copy(ownLocation = fix) }
+            }
+        }
+    }
+
+    /** Starts or stops attaching this device's position to outgoing transmissions. */
+    fun onToggleLocationSharing() {
+        val enabled = !_uiState.value.locationSharingEnabled
+        _uiState.update { it.copy(locationSharingEnabled = enabled) }
+        if (enabled) locationProvider.start() else locationProvider.stop()
+    }
+
+    /** Begins acquiring a fix. Called once the location permission is known to be held. */
+    fun startLocationUpdates() {
+        if (_uiState.value.locationSharingEnabled) locationProvider.start()
     }
 
     /**
@@ -252,7 +310,8 @@ class MainViewModel(
                 targetLanguage = target ?: it.targetLanguage,
                 isRemoteMessage = true,
                 isAlertPlaying = isAlert,
-                feedbackSubmitted = null
+                feedbackSubmitted = null,
+                senderLocation = message.senderLocation()
             )
         }
 
@@ -327,7 +386,10 @@ class MainViewModel(
                 translatedText = "",
                 hasAudioToReplay = false,
                 isRemoteMessage = false,
-                isAlertPlaying = false
+                isAlertPlaying = false,
+                // A new transmission replaces the received one; keeping the old sender's
+                // position on screen would be actively dangerous in a rescue context.
+                senderLocation = null
             )
         }
 
@@ -467,13 +529,21 @@ class MainViewModel(
         var netMs: Long? = null
         val engine = transportEngine
         if (engine != null && engine.connectionState.value == TransportConnectionState.CONNECTED) {
-            val outgoing = TransportMessage(
+            val base = TransportMessage(
                 type = if (isEmergency) TransportMessageType.ALERT else TransportMessageType.TRANSLATION,
                 sourceLanguage = sourceLang.bcp47Code,
                 targetLanguage = targetLang.bcp47Code,
                 text = translated,
                 priority = if (isEmergency) 1 else 0
             )
+            // Attach the sender's position so the receiver knows where to send help.
+            // Omitted entirely when sharing is off or no fix has been acquired, which
+            // also keeps those bytes off the link.
+            val outgoing = if (_uiState.value.locationSharingEnabled) {
+                TransportMessage.withLocation(base, _uiState.value.ownLocation)
+            } else {
+                base
+            }
             val netStart = timeProvider()
             val sendResult = engine.send(outgoing)
             netMs = (timeProvider() - netStart).coerceAtLeast(0)
@@ -658,6 +728,7 @@ class MainViewModel(
         audioRecorder.release()
         audioPlayer?.release()
         speechPipeline?.release()
+        locationProvider.stop()
     }
 
     private companion object {

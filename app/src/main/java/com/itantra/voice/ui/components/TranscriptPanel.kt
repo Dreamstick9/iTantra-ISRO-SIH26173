@@ -47,7 +47,9 @@ fun TranscriptPanel(
     isAlert: Boolean,
     canReplay: Boolean,
     onReplay: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    senderLocation: com.itantra.voice.location.GeoPoint? = null,
+    bearingToSender: String? = null
 ) {
     Column(
         modifier = modifier
@@ -67,6 +69,13 @@ fun TranscriptPanel(
             modifier = Modifier.weight(1f)
         )
 
+        // Sits with the received message: it describes where that message came from.
+        SenderLocationRow(
+            senderLocation = senderLocation,
+            bearingToSender = bearingToSender
+        )
+
+        Spacer(Modifier.height(10.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         Spacer(Modifier.height(16.dp))
 

@@ -13,16 +13,21 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-    <!-- Android 12 and below requires location for Wi-Fi P2P discovery. From Android 12
-         a FINE request must be accompanied by COARSE, because the user may grant only
-         the approximate one. Both are capped at API 32: on 13+ NEARBY_WIFI_DEVICES
-         replaces them and the app never asks for location at all. -->
-    <uses-permission
-        android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="32" />
-    <uses-permission
-        android:name="android.permission.ACCESS_COARSE_LOCATION"
-        android:maxSdkVersion="32" />
+    <!-- Location, for two distinct reasons:
+         1. GNSS position attached to transmissions so the receiver knows where the
+            sender is. This is a satellite fix computed on the handset — no network.
+         2. Wi-Fi P2P discovery on Android 12 and below.
+         No maxSdkVersion any more: reason 1 applies on every version. From Android 12 a
+         FINE request must be accompanied by COARSE, because the user may grant only the
+         approximate one. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- GNSS is central to the distress use case but the app still runs without it,
+         falling back to transmitting text alone. -->
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
     <!-- Android 13+ (API 33+) requires NEARBY_WIFI_DEVICES -->
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"

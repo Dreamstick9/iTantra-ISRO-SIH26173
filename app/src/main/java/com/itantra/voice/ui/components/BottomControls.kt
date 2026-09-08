@@ -46,7 +46,10 @@ fun BottomControls(
     canRateTranslation: Boolean,
     feedbackSubmitted: Boolean?,
     onFeedback: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isLocationSharing: Boolean = false,
+    hasLocationFix: Boolean = false,
+    onToggleLocation: () -> Unit = {}
 ) {
     Row(
         modifier = modifier
@@ -55,7 +58,15 @@ fun BottomControls(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        EmergencyToggle(isArmed = isEmergencyArmed, onToggle = onToggleEmergency)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            EmergencyToggle(isArmed = isEmergencyArmed, onToggle = onToggleEmergency)
+            Spacer(Modifier.width(14.dp))
+            LocationToggle(
+                isEnabled = isLocationSharing,
+                hasFix = hasLocationFix,
+                onToggle = onToggleLocation
+            )
+        }
 
         AnimatedVisibility(visible = canRateTranslation) {
             Row(verticalAlignment = Alignment.CenterVertically) {

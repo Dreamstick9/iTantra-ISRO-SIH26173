@@ -41,9 +41,26 @@ object WifiDirectPermissionHelper {
         }
     }
 
-    fun getAllRequiredPermissions(): Array<String> {
-        return arrayOf(Manifest.permission.RECORD_AUDIO) + getRequiredWifiDirectPermissions()
-    }
+    /**
+     * Location permissions, needed on every Android version for the GNSS position
+     * attached to transmissions — independently of Wi-Fi Direct, which only needs them
+     * below Android 13.
+     */
+    fun getLocationPermissions(): Array<String> = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+
+    /** True when a fine or coarse fix may be read. */
+    fun hasLocationPermission(context: Context): Boolean =
+        getLocationPermissions().any { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+
+    fun getAllRequiredPermissions(): Array<String> =
+        (arrayOf(Manifest.permission.RECORD_AUDIO) +
+            getRequiredWifiDirectPermissions() +
+            getLocationPermissions()).distinct().toTypedArray()
 
     /** True when the microphone is granted and Wi-Fi Direct discovery is permitted. */
     fun hasAllRequiredPermissions(context: Context): Boolean {
@@ -51,6 +68,6 @@ object WifiDirectPermissionHelper {
             context,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        return micGranted && hasWifiDirectPermissions(context)
+        return micGranted && hasWifiDirectPermissions(context) && hasLocationPermission(context)
     }
 }

@@ -116,7 +116,9 @@ fun MainScreen(
                     isRemote = uiState.isRemoteMessage,
                     isAlert = uiState.isAlertPlaying || uiState.isEmergencyMode,
                     canReplay = uiState.hasAudioToReplay,
-                    onReplay = viewModel::onReplayAudio
+                    onReplay = viewModel::onReplayAudio,
+                    senderLocation = uiState.senderLocation,
+                    bearingToSender = uiState.bearingToSender
                 )
             }
 
@@ -153,7 +155,10 @@ fun MainScreen(
                 onToggleEmergency = viewModel::onToggleEmergencyMode,
                 canRateTranslation = uiState.translatedText.isNotBlank() && uiState.canRecord,
                 feedbackSubmitted = uiState.feedbackSubmitted,
-                onFeedback = viewModel::onFeedback
+                onFeedback = viewModel::onFeedback,
+                isLocationSharing = uiState.locationSharingEnabled,
+                hasLocationFix = uiState.ownLocation != null,
+                onToggleLocation = viewModel::onToggleLocationSharing
             )
 
             Spacer(Modifier.height(24.dp))

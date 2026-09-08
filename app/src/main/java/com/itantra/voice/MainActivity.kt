@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.itantra.voice.audio.AudioPlayer
 import com.itantra.voice.audio.SystemAlarmVolumeController
+import com.itantra.voice.location.GpsLocationProvider
 import com.itantra.voice.pipeline.ConfigurableSpeechPipeline
 import com.itantra.voice.pipeline.OnDeviceSpeechPipeline
 import com.itantra.voice.pipeline.SarvamSpeechPipeline
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
     private var transportEngine: WifiDirectTransportEngine? = null
     private var speechPipeline: SpeechPipeline? = null
     private lateinit var settings: SettingsStore
+    private var locationProvider: GpsLocationProvider? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +65,10 @@ class MainActivity : ComponentActivity() {
         viewModel.initFeedbackRepository(filesDir)
         viewModel.setSpeechPipeline(buildSpeechPipeline())
 
+        val gps = GpsLocationProvider(applicationContext)
+        locationProvider = gps
+        viewModel.setLocationProvider(gps)
+
         val engine = WifiDirectTransportEngine(
             context = applicationContext,
             scope = lifecycleScope
@@ -79,10 +85,18 @@ class MainActivity : ComponentActivity() {
                     val micGranted = permissions[Manifest.permission.RECORD_AUDIO]
                         ?: hasMicPermission()
                     viewModel.onPermissionResult(micGranted)
+                    // Start GNSS only once the grant is in: requesting updates without it
+                    // throws, and the first fix can take a while outdoors.
+                    if (WifiDirectPermissionHelper.hasLocationPermission(this@MainActivity)) {
+                        viewModel.startLocationUpdates()
+                    }
                 }
 
                 LaunchedEffect(Unit) {
                     viewModel.onPermissionResult(hasMicPermission())
+                    if (WifiDirectPermissionHelper.hasLocationPermission(this@MainActivity)) {
+                        viewModel.startLocationUpdates()
+                    }
                     if (!WifiDirectPermissionHelper.hasAllRequiredPermissions(this@MainActivity)) {
                         permissionLauncher.launch(WifiDirectPermissionHelper.getAllRequiredPermissions())
                     }
@@ -169,5 +183,6 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         transportEngine?.release()
         speechPipeline?.release()
+        locationProvider?.stop()
     }
 }
