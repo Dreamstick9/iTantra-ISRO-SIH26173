@@ -6,12 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.NetworkInfo
+import android.os.Build
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pDeviceList
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Looper
+import androidx.core.content.ContextCompat
 import com.itantra.voice.transport.DiscoveredPeer
 import com.itantra.voice.transport.TransportConnectionState
 import com.itantra.voice.transport.TransportEngine
@@ -77,8 +79,13 @@ class WifiDirectTransportEngine(
         },
         onDisconnected = { reason ->
             log.info("TCP socket disconnected: $reason")
-            if (_connectionState.value == TransportConnectionState.CONNECTED) {
+            // Also reset from CONNECTING: a socket that failed mid-handshake previously
+            // left the UI pinned on "Connecting..." with no way back.
+            if (_connectionState.value == TransportConnectionState.CONNECTED ||
+                _connectionState.value == TransportConnectionState.CONNECTING
+            ) {
                 _connectionState.value = TransportConnectionState.DISCONNECTED
+                _connectedPeer.value = null
             }
         }
     )
@@ -109,8 +116,15 @@ class WifiDirectTransportEngine(
                         log.info("Wi-Fi P2P link established, requesting connection info...")
                         requestConnectionInfo()
                     } else {
-                        log.info("Wi-Fi P2P link disconnected")
-                        handleP2pDisconnect()
+                        // Ignore while CONNECTING: registering the receiver replays a
+                        // sticky CONNECTION_CHANGED with isConnected=false, which used to
+                        // cancel the connection attempt that had just been initiated.
+                        if (_connectionState.value == TransportConnectionState.CONNECTING) {
+                            log.info("Ignoring stale P2P disconnect while connecting")
+                        } else {
+                            log.info("Wi-Fi P2P link disconnected")
+                            handleP2pDisconnect()
+                        }
                     }
                 }
 
@@ -140,7 +154,15 @@ class WifiDirectTransportEngine(
                 addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
             }
             try {
-                ctx.registerReceiver(p2pReceiver, filter)
+                // Android 14+ (targetSdk 34+) requires an explicit export flag for
+                // runtime-registered receivers. These are system P2P broadcasts only, so
+                // the receiver must not be exported to other apps.
+                ContextCompat.registerReceiver(
+                    ctx,
+                    p2pReceiver,
+                    filter,
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
             } catch (e: Exception) {
                 log.warning("Failed to register Wi-Fi Direct receiver: ${e.message}")
             }
@@ -230,11 +252,17 @@ class WifiDirectTransportEngine(
         val mgr = p2pManager ?: return
         val ch = channel ?: return
 
+        // Discovery competes with group negotiation and makes connect() flaky.
+        mgr.stopPeerDiscovery(ch, null)
+
         _connectionState.value = TransportConnectionState.CONNECTING
         _connectedPeer.value = peer
 
         val config = WifiP2pConfig().apply {
             deviceAddress = peer.deviceAddress
+            // Let the peer that initiates become the client, so the roles (and therefore
+            // which side listens on the TCP port) are decided deterministically.
+            groupOwnerIntent = 0
         }
 
         mgr.connect(ch, config, object : WifiP2pManager.ActionListener {
@@ -313,6 +341,10 @@ class WifiDirectTransportEngine(
                 context?.unregisterReceiver(p2pReceiver)
             } catch (ignored: Exception) {}
         }
-
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            try {
+                channel?.close()
+            } catch (ignored: Exception) {}
+        }
     }
 }

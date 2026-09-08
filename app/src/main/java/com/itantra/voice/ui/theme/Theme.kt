@@ -1,58 +1,90 @@
 package com.itantra.voice.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
+import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = IndicBlue,
-    secondary = IndicOrange,
-    tertiary = IndicGreen,
-    background = SurfaceDark
+/**
+ * Red on neutral for transmit, green on neutral for link. Dynamic colour is
+ * deliberately not used: on a disaster-response tool the meaning of red and green must
+ * not change with the user's wallpaper.
+ */
+private val LightColors = lightColorScheme(
+    primary = Signal,
+    onPrimary = Color.White,
+    primaryContainer = Signal,
+    onPrimaryContainer = Color.White,
+
+    secondary = Link,
+    onSecondary = Color.White,
+    secondaryContainer = Link,
+    onSecondaryContainer = Color.White,
+
+    background = PaperLight,
+    onBackground = InkLight,
+    surface = SurfaceLight,
+    onSurface = InkLight,
+    surfaceVariant = PaperLight,
+    onSurfaceVariant = InkMutedLight,
+    surfaceContainerLowest = SurfaceLight,
+    surfaceContainerLow = SurfaceLight,
+    surfaceContainer = SurfaceLight,
+    surfaceContainerHigh = SurfaceLight,
+    surfaceContainerHighest = PaperLight,
+    surfaceTint = Color.Transparent,
+    inverseSurface = InkLight,
+    inverseOnSurface = PaperLight,
+    outline = LineLight,
+    outlineVariant = LineLight,
+
+    error = Signal,
+    onError = Color.White
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = IndicBlue,
-    secondary = IndicOrange,
-    tertiary = IndicGreen
+private val DarkColors = darkColorScheme(
+    primary = Signal,
+    onPrimary = Color.White,
+    primaryContainer = SignalDim,
+    onPrimaryContainer = Color.White,
+
+    secondary = Link,
+    onSecondary = Color.White,
+    secondaryContainer = LinkDim,
+    onSecondaryContainer = Color.White,
+
+    background = PaperDark,
+    onBackground = InkDark,
+    surface = SurfaceDarkElevated,
+    onSurface = InkDark,
+    surfaceVariant = SurfaceDarkElevated,
+    onSurfaceVariant = InkMutedDark,
+    surfaceContainerLowest = PaperDark,
+    surfaceContainerLow = SurfaceDarkElevated,
+    surfaceContainer = SurfaceDarkElevated,
+    surfaceContainerHigh = SurfaceDarkElevated,
+    surfaceContainerHighest = LineDark,
+    surfaceTint = Color.Transparent,
+    inverseSurface = InkDark,
+    inverseOnSurface = PaperDark,
+    outline = LineDark,
+    outlineVariant = LineDark,
+
+    error = Signal,
+    onError = Color.White
 )
 
 @Composable
 fun ITantraTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
-    val view = LocalView.current
-    if (!view.isInEditMode && view.context is Activity) {
-        SideEffect {
-            val window = (view.context as Activity).window
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
-        }
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
+        colorScheme = if (darkTheme) DarkColors else LightColors,
+        typography = ITantraTypography,
+        shapes = ITantraShapes,
         content = content
     )
 }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -78,6 +79,10 @@ class AudioRecorder(
         const val MAX_RECORDING_SECONDS = 30
         const val MAX_RECORDING_BYTES = MAX_RECORDING_SECONDS * BYTE_RATE // 960,000 bytes (~0.96 MB)
         const val MIN_BUFFER_FLOOR = 4096
+        const val READ_CHUNK_BYTES = 2048
+
+        /** Upper bound on waiting for the capture coroutine to finish draining. */
+        const val JOB_JOIN_TIMEOUT_MS = 1_000L
 
         /**
          * Computes scaled buffer size: 2x minBufferSize with 4096 bytes floor.
@@ -159,7 +164,7 @@ class AudioRecorder(
             activeRecord = record
 
             recordingJob = scope.launch(ioDispatcher) {
-                val chunkBuffer = ByteArray(2048)
+                val chunkBuffer = ByteArray(READ_CHUNK_BYTES)
                 try {
                     while (isRecordingInternal.get() && isActive) {
                         val bytesRead = record.read(chunkBuffer, 0, chunkBuffer.size)
@@ -194,6 +199,10 @@ class AudioRecorder(
                         }
                     }
                 } finally {
+                    // Drain here rather than from stopRecording(): this coroutine is the
+                    // sole reader of `record`, so the tail of the utterance is collected
+                    // without a second thread racing it for the same hardware buffer.
+                    drainInto(record)
                     safeReleaseRecord(record)
                 }
             }
@@ -202,45 +211,45 @@ class AudioRecorder(
     }
 
     /**
-     * Stops audio recording, drains any trailing buffered bytes, releases hardware resources,
-     * and returns raw captured PCM bytes.
+     * Stops audio recording and returns the raw captured PCM bytes.
+     *
+     * Suspends until the capture coroutine has drained the hardware buffer, so the
+     * returned array always includes the tail of the utterance. Draining is delegated
+     * to that coroutine because it is the only thread permitted to touch the
+     * AudioRecord; reading from two threads split utterances and produced the
+     * intermittent "No speech detected" failures.
      */
-    fun stopRecording(): ByteArray {
+    suspend fun stopRecording(): ByteArray {
         val recordToStop: NativeAudioRecord?
-        val jobToCancel: Job?
+        val jobToStop: Job?
 
         synchronized(bufferLock) {
             isRecordingInternal.set(false)
             recordToStop = activeRecord
-            jobToCancel = recordingJob
+            jobToStop = recordingJob
             recordingJob = null
         }
 
-        // 1. Tell AudioRecord to stop capturing new frames, preserving buffered audio
+        // Ask AudioRecord to stop capturing new frames. Already-buffered audio survives,
+        // and the pending read() in the capture loop returns so the coroutine can finish.
         try {
             if (recordToStop?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 recordToStop.stop()
             }
         } catch (ignored: Exception) {}
 
-        // 2. Drain any remaining unread bytes from the hardware buffer so tail speech is never truncated
-        val drainBuffer = ByteArray(2048)
-        try {
-            while (recordToStop != null) {
-                val drained = recordToStop.read(drainBuffer, 0, drainBuffer.size)
-                if (drained > 0) {
-                    synchronized(bufferLock) {
-                        currentBuffer.write(drainBuffer, 0, drained)
-                    }
-                } else {
-                    break
-                }
+        // Let the capture coroutine exit its loop and run its drain/release in finally.
+        // It is not cancelled: cancellation would skip the drain and truncate the tail.
+        if (jobToStop != null) {
+            withTimeoutOrNull(JOB_JOIN_TIMEOUT_MS) { jobToStop.join() }
+            if (jobToStop.isActive) {
+                // Hung in a blocking read; cancel and release so the mic is never leaked.
+                jobToStop.cancel()
+                safeReleaseRecord(recordToStop)
             }
-        } catch (ignored: Exception) {}
-
-        // 3. Cancel the background streaming coroutine and safely release the record
-        jobToCancel?.cancel()
-        safeReleaseRecord(recordToStop)
+        } else {
+            safeReleaseRecord(recordToStop)
+        }
 
         synchronized(bufferLock) {
             _amplitude.value = 0f
@@ -251,10 +260,46 @@ class AudioRecorder(
     }
 
     /**
-     * Safely releases audio hardware and cancels any ongoing recording job.
+     * Reads whatever the hardware still holds into the capture buffer.
+     * Called only from the capture coroutine, which is the sole reader.
+     */
+    private fun drainInto(record: NativeAudioRecord) {
+        val drainBuffer = ByteArray(READ_CHUNK_BYTES)
+        try {
+            while (true) {
+                // Honour the capture cap here too. When the 30 s limit is what ended the
+                // loop, the hardware is still in RECORDING state and keeps returning
+                // data, so an unbounded drain would blow straight past the cap.
+                val alreadyCaptured = synchronized(bufferLock) { currentBuffer.size() }
+                if (alreadyCaptured >= MAX_RECORDING_BYTES) break
+
+                val drained = record.read(drainBuffer, 0, drainBuffer.size)
+                if (drained <= 0) break
+
+                val room = MAX_RECORDING_BYTES - alreadyCaptured
+                synchronized(bufferLock) {
+                    currentBuffer.write(drainBuffer, 0, minOf(drained, room))
+                }
+            }
+        } catch (ignored: Exception) {}
+    }
+
+    /**
+     * Stops capture and discards the audio. Safe to call from a non-suspending context
+     * such as ViewModel teardown.
      */
     fun release() {
-        stopRecording()
+        val recordToStop: NativeAudioRecord?
+        val jobToStop: Job?
+        synchronized(bufferLock) {
+            isRecordingInternal.set(false)
+            recordToStop = activeRecord
+            jobToStop = recordingJob
+            recordingJob = null
+            currentBuffer.reset()
+        }
+        jobToStop?.cancel()
+        safeReleaseRecord(recordToStop)
     }
 
     private fun safeReleaseRecord(record: NativeAudioRecord?) {

@@ -112,7 +112,10 @@ class AudioPlayerTest {
         audioPlayer.playBase64Wav(validBase64, isEmergency = false)
 
         assertEquals(AudioAttributes.CONTENT_TYPE_SPEECH, fakePlayer.contentType)
-        assertEquals(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY, fakePlayer.usage)
+        // USAGE_MEDIA: a walkie-talkie belongs on the media stream. The previous
+        // USAGE_ASSISTANCE_ACCESSIBILITY is the screen-reader stream and is ducked
+        // against other audio differently.
+        assertEquals(AudioAttributes.USAGE_MEDIA, fakePlayer.usage)
     }
 
     @Test

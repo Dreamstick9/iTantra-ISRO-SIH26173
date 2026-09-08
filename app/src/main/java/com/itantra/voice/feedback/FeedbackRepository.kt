@@ -33,7 +33,11 @@ class FeedbackRepository(filesDir: File) {
 
     private val feedbackFile = File(filesDir, FEEDBACK_FILE_NAME)
     private val lock = ReentrantLock()
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.getDefault())
+    // SimpleDateFormat is not thread-safe and was previously formatted outside the
+    // lock, so concurrent feedback writes could corrupt each other's timestamps.
+    private val dateFormat = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+    }
 
     /**
      * Saves a feedback entry atomically to the local JSON Lines file.
@@ -52,7 +56,7 @@ class FeedbackRepository(filesDir: File) {
         isPositive: Boolean
     ) {
         val entry = buildJsonLine(
-            timestamp = dateFormat.format(Date()),
+            timestamp = dateFormat.get().format(Date()),
             sourceLanguage = sourceLanguage,
             targetLanguage = targetLanguage,
             sourceText = sourceText,

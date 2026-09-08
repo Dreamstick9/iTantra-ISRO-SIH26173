@@ -40,8 +40,10 @@ object MessageFramer {
         val dataIn = DataInputStream(inputStream)
         val length = dataIn.readInt()
 
-        if (length < 0 || length > MAX_PAYLOAD_SIZE) {
-            throw IllegalStateException("Invalid frame length: $length (maximum allowed: $MAX_PAYLOAD_SIZE)")
+        // Reject zero as well as negative: an empty payload is never a valid message and
+        // previously fell through to a misleading JSON parse failure.
+        if (length <= 0 || length > MAX_PAYLOAD_SIZE) {
+            throw IllegalStateException("Invalid frame length: $length (allowed: 1..$MAX_PAYLOAD_SIZE)")
         }
 
         val payload = ByteArray(length)

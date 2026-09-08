@@ -83,9 +83,18 @@ class SarvamApiClient(
             }
         }
 
+        /**
+         * Body-level logging only in debug builds: TTS responses carry hundreds of KB
+         * of base64 audio and STT requests carry the user's recorded speech, neither of
+         * which belongs in a release logcat.
+         */
         fun createLoggingInterceptor(): HttpLoggingInterceptor {
             return HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.HEADERS
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
                 redactHeader(AUTH_HEADER)
             }
         }
@@ -115,9 +124,13 @@ class SarvamApiClient(
         val cleanPath = endpointPath.removePrefix("/")
         val fullUrl = "$cleanBase$cleanPath"
 
+        // Set the header on the request as well as in createAuthInterceptor. The
+        // interceptor only exists on the default client, so a caller-supplied
+        // OkHttpClient would otherwise dispatch unauthenticated requests. Both paths
+        // agree on what counts as a usable key via isPlaceholderKey.
         val builder = Request.Builder().url(fullUrl)
         val apiKey = apiKeyProvider().trim()
-        if (apiKey.isNotBlank() && !isPlaceholderKey(apiKey)) {
+        if (!isPlaceholderKey(apiKey)) {
             builder.header(AUTH_HEADER, apiKey)
         }
         return builder
@@ -243,15 +256,18 @@ class SarvamApiClient(
         parser: (String) -> T
     ): Result<T> {
         return try {
-            val response = okHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Result.failure(mapHttpError(response))
-            } else {
-                val bodyString = response.body?.string() ?: ""
-                if (bodyString.isBlank()) {
-                    Result.failure(SarvamApiException.EmptyResponseException("Response body was empty."))
+            // `use` guarantees the connection returns to the pool even when the body is
+            // null or the parser throws; without it every failed call leaked a socket.
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Result.failure(mapHttpError(response))
                 } else {
-                    Result.success(parser(bodyString))
+                    val bodyString = response.body?.string() ?: ""
+                    if (bodyString.isBlank()) {
+                        Result.failure(SarvamApiException.EmptyResponseException("Response body was empty."))
+                    } else {
+                        Result.success(parser(bodyString))
+                    }
                 }
             }
         } catch (e: Exception) {

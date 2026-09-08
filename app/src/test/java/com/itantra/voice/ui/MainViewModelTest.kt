@@ -7,8 +7,11 @@ import com.itantra.voice.audio.AudioRecorder
 import com.itantra.voice.audio.NativeAudioRecord
 import com.itantra.voice.audio.NativeMediaPlayer
 import com.itantra.voice.data.Language
-import com.itantra.voice.fixtures.SarvamMockFixtures
-import com.itantra.voice.network.SarvamApiClient
+import com.itantra.voice.pipeline.PipelineMode
+import com.itantra.voice.pipeline.SpeechPipeline
+import com.itantra.voice.pipeline.SynthesisResult
+import com.itantra.voice.pipeline.TranscriptionResult
+import com.itantra.voice.pipeline.TranslationResult
 import com.itantra.voice.transport.DiscoveredPeer
 import com.itantra.voice.transport.TransportConnectionState
 import com.itantra.voice.transport.TransportEngine
@@ -27,9 +30,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -131,10 +134,61 @@ class MainViewModelTest {
         }
     }
 
+    /**
+     * Deterministic stand-in for a real speech engine. Each stage returns a canned
+     * value, or a canned failure, so the FSM can be driven through every branch without
+     * a network, a microphone, or an Android TTS service.
+     */
+    private class FakeSpeechPipeline(
+        var transcript: String = "नमस्ते",
+        var translation: String = "Hello",
+        var audio: ByteArray = com.itantra.voice.audio.WavEncoder.encode(ByteArray(3200) { 7 }),
+        var transcribeError: Throwable? = null,
+        var translateError: Throwable? = null,
+        var synthesizeError: Throwable? = null,
+        var available: Boolean = true
+    ) : SpeechPipeline {
+        override val mode = PipelineMode.ON_DEVICE
+        override val displayName = "Fake"
+
+        var lastSynthesisWasEmergency: Boolean? = null
+        var synthesisCallCount = 0
+        var releaseCount = 0
+
+        /** Stages executed, in order, so tests can assert the pipeline short-circuits. */
+        val stageCalls = mutableListOf<String>()
+
+        override suspend fun isAvailable() = available
+
+        override suspend fun transcribe(wavData: ByteArray, source: Language): Result<TranscriptionResult> {
+            stageCalls.add("stt")
+            return transcribeError?.let { Result.failure(it) }
+                ?: Result.success(TranscriptionResult(transcript))
+        }
+
+        override suspend fun translate(text: String, source: Language, target: Language): Result<TranslationResult> {
+            stageCalls.add("translate")
+            return translateError?.let { Result.failure(it) }
+                ?: Result.success(TranslationResult(translation))
+        }
+
+        override suspend fun synthesize(text: String, target: Language, isEmergency: Boolean):
+            Result<SynthesisResult> {
+            stageCalls.add("tts")
+            lastSynthesisWasEmergency = isEmergency
+            synthesisCallCount++
+            return synthesizeError?.let { Result.failure(it) }
+                ?: Result.success(SynthesisResult(wavBytes = audio))
+        }
+
+        override fun release() {
+            releaseCount++
+        }
+    }
+
     private lateinit var fakeRecord: FakeNativeAudioRecord
     private lateinit var audioRecorder: AudioRecorder
-    private lateinit var mockInterceptor: SarvamMockFixtures.MockSarvamInterceptor
-    private lateinit var sarvamApiClient: SarvamApiClient
+    private lateinit var fakePipeline: FakeSpeechPipeline
     private lateinit var fakePlayer: FakeNativeMediaPlayer
     private lateinit var audioPlayer: AudioPlayer
     private var mockCurrentTime = 1000L
@@ -149,21 +203,7 @@ class MainViewModelTest {
             recordProvider = { _, _, _, _, _ -> fakeRecord }
         )
 
-        mockInterceptor = SarvamMockFixtures.MockSarvamInterceptor(
-            sttResponseJson = SarvamMockFixtures.STT_RESPONSE_HINDI,
-            translateResponseJson = SarvamMockFixtures.TRANSLATE_RESPONSE_HI_TO_EN,
-            ttsResponseJson = SarvamMockFixtures.TTS_RESPONSE_SUCCESS
-        )
-
-        val okHttpClient = OkHttpClient.Builder()
-            .addInterceptor(mockInterceptor)
-            .build()
-
-        sarvamApiClient = SarvamApiClient(
-            apiKeyProvider = { "test-api-key" },
-            customClient = okHttpClient,
-            ioDispatcher = testDispatcher
-        )
+        fakePipeline = FakeSpeechPipeline()
 
         val cacheDir = tempFolder.newFolder("test_cache")
         fakePlayer = FakeNativeMediaPlayer()
@@ -174,7 +214,7 @@ class MainViewModelTest {
     @After
     fun tearDown() {
         try {
-            audioRecorder.stopRecording()
+            runBlocking { audioRecorder.stopRecording() }
             audioRecorder.release()
         } catch (ignored: Exception) {}
         try {
@@ -187,12 +227,15 @@ class MainViewModelTest {
     private fun createViewModel(transportEngine: TransportEngine? = null): MainViewModel {
         return MainViewModel(
             audioRecorder = audioRecorder,
-            sarvamApiClient = sarvamApiClient,
+            speechPipeline = fakePipeline,
             audioPlayer = audioPlayer,
             transportEngine = transportEngine,
             ioDispatcher = testDispatcher,
             timeProvider = { mockCurrentTime }
-        )
+        ).also {
+            // Push-to-talk is permission-gated; every PTT test assumes it was granted.
+            it.onPermissionResult(true)
+        }
     }
 
 
@@ -259,8 +302,8 @@ class MainViewModelTest {
         val state = viewModel.uiState.value
         assertEquals(PttState.IDLE, state.state)
         assertFalse(state.isHolding)
-        assertEquals("Hold button while speaking", state.errorMessage)
-        assertEquals("No network calls must be made for short tap", 0, mockInterceptor.capturedRequests.size)
+        assertEquals("Hold the button while speaking.", state.errorMessage)
+        assertEquals("No pipeline work for a short tap", 0, fakePipeline.stageCalls.size)
     }
 
     // 4. Full Pipeline Success: IDLE -> RECORDING -> TRANSCRIBING -> TRANSLATING -> SYNTHESIZING -> PLAYING -> IDLE
@@ -278,7 +321,7 @@ class MainViewModelTest {
         assertTrue("Transcript populated", stateWhilePlaying.sourceTranscript.isNotBlank())
         assertTrue("Translated text populated", stateWhilePlaying.translatedText.isNotBlank())
         assertTrue("MediaPlayer started", fakePlayer.startCalled)
-        assertEquals("3 network requests executed", 3, mockInterceptor.capturedRequests.size)
+        assertEquals(listOf("stt", "translate", "tts"), fakePipeline.stageCalls)
 
         // Verify Telemetry Latencies
         assertTrue(stateWhilePlaying.latencies.sttMs >= 0)
@@ -297,8 +340,7 @@ class MainViewModelTest {
     // 5. STT Network Error Handling Transitions to ERROR
     @Test
     fun testSttNetworkErrorTransitionsToError() = runTest(testDispatcher) {
-        mockInterceptor.sttStatusCode = 500
-        mockInterceptor.sttResponseJson = SarvamMockFixtures.ERROR_500_SERVER_ERROR
+        fakePipeline.transcribeError = IllegalStateException("Speech service unavailable")
 
         val viewModel = createViewModel()
 
@@ -307,14 +349,13 @@ class MainViewModelTest {
         val state = viewModel.uiState.value
         assertEquals(PttState.ERROR, state.state)
         assertNotNull(state.errorMessage)
-        assertEquals(1, mockInterceptor.capturedRequests.size)
+        assertEquals(listOf("stt"), fakePipeline.stageCalls)
     }
 
     // 6. Translation Network Error Transitions to ERROR
     @Test
     fun testTranslationErrorTransitionsToError() = runTest(testDispatcher) {
-        mockInterceptor.translateStatusCode = 429
-        mockInterceptor.translateResponseJson = SarvamMockFixtures.ERROR_429_RATE_LIMIT
+        fakePipeline.translateError = IllegalStateException("Rate limit reached")
 
         val viewModel = createViewModel()
 
@@ -323,14 +364,13 @@ class MainViewModelTest {
         val state = viewModel.uiState.value
         assertEquals(PttState.ERROR, state.state)
         assertNotNull(state.errorMessage)
-        assertEquals("STT and Translate called, TTS aborted", 2, mockInterceptor.capturedRequests.size)
+        assertEquals(listOf("stt", "translate"), fakePipeline.stageCalls)
     }
 
     // 7. TTS Synthesis Error Transitions to ERROR
     @Test
     fun testSynthesisErrorTransitionsToError() = runTest(testDispatcher) {
-        mockInterceptor.ttsStatusCode = 503
-        mockInterceptor.ttsResponseJson = """{"error":"Service unavailable"}"""
+        fakePipeline.synthesizeError = IllegalStateException("Synthesis service unavailable")
 
         val viewModel = createViewModel()
 
@@ -338,13 +378,13 @@ class MainViewModelTest {
 
         val state = viewModel.uiState.value
         assertEquals(PttState.ERROR, state.state)
-        assertEquals(3, mockInterceptor.capturedRequests.size)
+        assertEquals(listOf("stt", "translate", "tts"), fakePipeline.stageCalls)
     }
 
     // 8. Silence STT Aborts Downstream Pipeline and Reverts to IDLE
     @Test
     fun testSilenceSttAbortsPipelineAndReturnsToIdle() = runTest(testDispatcher) {
-        mockInterceptor.sttResponseJson = SarvamMockFixtures.STT_RESPONSE_EMPTY
+        fakePipeline.transcript = ""
 
         val viewModel = createViewModel()
 
@@ -352,8 +392,8 @@ class MainViewModelTest {
 
         val state = viewModel.uiState.value
         assertEquals(PttState.IDLE, state.state)
-        assertEquals("No speech detected", state.errorMessage)
-        assertEquals("Downstream translation/TTS must be aborted", 1, mockInterceptor.capturedRequests.size)
+        assertEquals("No speech detected.", state.errorMessage)
+        assertEquals("Downstream translation/TTS must be aborted", listOf("stt"), fakePipeline.stageCalls)
     }
 
     // 9. Replay Plays Cached Audio Without Network Calls
@@ -365,7 +405,7 @@ class MainViewModelTest {
         executePttHold(viewModel, durationMs = 500L)
         fakePlayer.triggerCompletion()
 
-        assertEquals(3, mockInterceptor.capturedRequests.size)
+        assertEquals(listOf("stt", "translate", "tts"), fakePipeline.stageCalls)
         assertTrue(viewModel.uiState.value.hasAudioToReplay)
 
         // Trigger Replay Audio
@@ -373,7 +413,7 @@ class MainViewModelTest {
         advanceUntilIdle()
 
         assertEquals(PttState.PLAYING, viewModel.uiState.value.state)
-        assertEquals("No additional network calls on replay", 3, mockInterceptor.capturedRequests.size)
+        assertEquals("Replay must not re-run the pipeline", listOf("stt", "translate", "tts"), fakePipeline.stageCalls)
 
         // Complete replay playback
         fakePlayer.triggerCompletion()
@@ -413,7 +453,7 @@ class MainViewModelTest {
     // 12. Dismiss Error Reverts State to IDLE
     @Test
     fun testDismissErrorRevertsStateToIdle() = runTest(testDispatcher) {
-        mockInterceptor.sttStatusCode = 500
+        fakePipeline.transcribeError = IllegalStateException("Speech service unavailable")
         val viewModel = createViewModel()
 
         executePttHold(viewModel, durationMs = 500L)
@@ -429,7 +469,7 @@ class MainViewModelTest {
     // 13. PTT Press While Error Clears Error and Starts Recording
     @Test
     fun testPttPressWhileErrorClearsErrorAndStartsRecording() = runTest(testDispatcher) {
-        mockInterceptor.sttStatusCode = 500
+        fakePipeline.transcribeError = IllegalStateException("Speech service unavailable")
         val viewModel = createViewModel()
 
         executePttHold(viewModel, durationMs = 500L)
@@ -515,7 +555,7 @@ class MainViewModelTest {
 
         viewModel.onPermissionResult(false)
         assertFalse(viewModel.uiState.value.micPermissionGranted)
-        assertTrue(viewModel.uiState.value.errorMessage!!.contains("Microphone permission required"))
+        assertTrue(viewModel.uiState.value.errorMessage!!.contains("Microphone permission"))
 
         viewModel.onPermissionResult(true)
         assertTrue(viewModel.uiState.value.micPermissionGranted)
@@ -560,8 +600,13 @@ class MainViewModelTest {
         private val _peer = MutableStateFlow<DiscoveredPeer?>(null)
         override val connectedPeer: StateFlow<DiscoveredPeer?> = _peer.asStateFlow()
 
-        val incomingChannel = MutableSharedFlow<TransportMessage>(replay = 1, extraBufferCapacity = 16)
+        // replay = 0 mirrors production: a replay buffer would re-deliver the previous
+        // message to every new collector, which is the duplicate-playback bug itself.
+        val incomingChannel = MutableSharedFlow<TransportMessage>(replay = 0, extraBufferCapacity = 16)
         override val incomingMessages: Flow<TransportMessage> = incomingChannel.asSharedFlow()
+
+        /** Delivers a message to whatever collectors are currently subscribed. */
+        suspend fun emit(message: TransportMessage) = incomingChannel.emit(message)
 
         val sentMessages = mutableListOf<TransportMessage>()
 
@@ -614,20 +659,95 @@ class MainViewModelTest {
     }
 
     @Test
-    fun testSendTestMessageTransmitsHelloFromItantra() = runTest {
+    fun testEmergencyModeFlagsOutgoingMessageAsAlert() = runTest {
         val transport = FakeTransportEngine(initialState = TransportConnectionState.CONNECTED)
         val viewModel = createViewModel(transportEngine = transport)
 
-        viewModel.onSendTestMessage()
-        testScheduler.runCurrent()
+        viewModel.onToggleEmergencyMode()
+        assertTrue(viewModel.uiState.value.isEmergencyMode)
+
+        executePttHold(viewModel)
+        advanceUntilIdle()
 
         assertEquals(1, transport.sentMessages.size)
         val sent = transport.sentMessages.first()
-        assertEquals("HELLO FROM ITANTRA", sent.text)
-        assertEquals(Language.DEFAULT_SOURCE.bcp47Code, sent.sourceLanguage)
-        assertEquals(Language.DEFAULT_TARGET.bcp47Code, sent.targetLanguage)
-        assertEquals("HELLO FROM ITANTRA", viewModel.uiState.value.translatedText)
-        assertNotNull(viewModel.uiState.value.latencies.netMs)
+        assertEquals(TransportMessageType.ALERT, sent.type)
+        assertEquals(1, sent.priority)
+        // The local synthesis of an armed transmission must also use the alarm route.
+        assertEquals(true, fakePipeline.lastSynthesisWasEmergency)
+    }
+
+    @Test
+    fun testNonEmergencyTransmissionIsPlainTranslation() = runTest {
+        val transport = FakeTransportEngine(initialState = TransportConnectionState.CONNECTED)
+        val viewModel = createViewModel(transportEngine = transport)
+
+        executePttHold(viewModel)
+        advanceUntilIdle()
+
+        assertEquals(1, transport.sentMessages.size)
+        assertEquals(TransportMessageType.TRANSLATION, transport.sentMessages.first().type)
+        assertEquals(0, transport.sentMessages.first().priority)
+        assertEquals(false, fakePipeline.lastSynthesisWasEmergency)
+    }
+
+    @Test
+    fun testIncomingAlertIsAnnouncedAsEmergency() = runTest {
+        val transport = FakeTransportEngine(initialState = TransportConnectionState.CONNECTED)
+        val viewModel = createViewModel(transportEngine = transport)
+
+        advanceUntilIdle()
+        transport.emit(
+            TransportMessage(
+                type = TransportMessageType.ALERT,
+                sourceLanguage = "hi-IN",
+                targetLanguage = "en-IN",
+                text = "CYCLONE WARNING",
+                priority = 1
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("CYCLONE WARNING", viewModel.uiState.value.translatedText)
+        assertEquals(true, fakePipeline.lastSynthesisWasEmergency)
+    }
+
+    @Test
+    fun testPttPressIsRejectedWithoutMicrophonePermission() = runTest {
+        val viewModel = createViewModel()
+        viewModel.onPermissionResult(false)
+
+        viewModel.onPttPress()
+        advanceUntilIdle()
+
+        // Must not enter RECORDING: constructing AudioRecord without the permission can
+        // only fail, so the press is refused up front with an actionable message.
+        assertEquals(PttState.IDLE, viewModel.uiState.value.state)
+        assertFalse(viewModel.uiState.value.isHolding)
+        assertNotNull(viewModel.uiState.value.errorMessage)
+    }
+
+    @Test
+    fun testSetTransportEngineTwiceDoesNotDuplicateIncomingHandling() = runTest {
+        val transport = FakeTransportEngine(initialState = TransportConnectionState.CONNECTED)
+        val viewModel = createViewModel(transportEngine = transport)
+
+        // Re-installing the same engine must not add a second set of collectors, which
+        // previously made every received message be spoken twice.
+        viewModel.setTransportEngine(transport)
+        advanceUntilIdle()
+
+        transport.emit(
+            TransportMessage(
+                sourceLanguage = "hi-IN",
+                targetLanguage = "en-IN",
+                text = "ONCE"
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("ONCE", viewModel.uiState.value.translatedText)
+        assertEquals(1, fakePipeline.synthesisCallCount)
     }
 
     @Test
@@ -642,6 +762,7 @@ class MainViewModelTest {
             type = TransportMessageType.ALERT
         )
 
+        advanceUntilIdle()
         transport.incomingChannel.emit(incoming)
         testScheduler.runCurrent()
         advanceUntilIdle()

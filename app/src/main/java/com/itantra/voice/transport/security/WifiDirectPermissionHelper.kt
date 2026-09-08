@@ -18,13 +18,25 @@ object WifiDirectPermissionHelper {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
         } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            // Android 12 splits location into precise/approximate and rejects a FINE-only
+            // request; both must be asked for together or the dialog never appears.
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
         }
     }
 
+    /**
+     * True when Wi-Fi Direct discovery is permitted.
+     *
+     * Below Android 13 the user may grant only approximate location, which is still
+     * sufficient for peer discovery, so *any* granted location permission counts rather
+     * than requiring all of them.
+     */
     fun hasWifiDirectPermissions(context: Context): Boolean {
         val permissions = getRequiredWifiDirectPermissions()
-        return permissions.all { perm ->
+        return permissions.any { perm ->
             ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
         }
     }
@@ -33,9 +45,12 @@ object WifiDirectPermissionHelper {
         return arrayOf(Manifest.permission.RECORD_AUDIO) + getRequiredWifiDirectPermissions()
     }
 
+    /** True when the microphone is granted and Wi-Fi Direct discovery is permitted. */
     fun hasAllRequiredPermissions(context: Context): Boolean {
-        return getAllRequiredPermissions().all { perm ->
-            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
-        }
+        val micGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        return micGranted && hasWifiDirectPermissions(context)
     }
 }

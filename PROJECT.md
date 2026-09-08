@@ -1,11 +1,25 @@
 # Project: iTantra Native Android Multilingual Prototype
 
+> **Status note.** This document describes the original Sarvam-cloud design. The app has
+> since been refactored so the speech engine is pluggable and the **offline on-device
+> pipeline is the default**, per the SIH26173 fully-offline mandate; the Sarvam cloud
+> client is retained as an opt-in fallback. See `README.md` and
+> `docs/ARCHITECTURE_NOTES.md` for the current architecture. Entries below marked
+> *(superseded)* no longer reflect the code.
+
 ## Architecture
-iTantra is an Android native multilingual voice communication prototype connecting Indian language speakers using official Sarvam AI APIs.
+iTantra is an Android native multilingual voice transceiver. Speech is recognised and
+synthesised on-device; only recognised text crosses the peer-to-peer link.
 - **Platform**: Android Native (Kotlin 2.3.20, Min SDK 26, Target SDK 35, Jetpack Compose BOM 2026.03.01, AGP 9.0.1, Gradle 9.1.0).
 - **Core Modules & Layers**:
   - `com.itantra.voice.audio`: Native `AudioRecord` background stream (16 kHz Mono 16-bit PCM), pure Kotlin 44-byte RIFF `WavEncoder`, and pop-free `AudioPlayer` for Base64 WAV playback via `MediaPlayer`.
-  - `com.itantra.voice.network`: OkHttp 4.12.0 client with `api-subscription-key` authentication header interceptor, connecting to official Sarvam endpoints (`saaras:v3` STT, `mayura:v1` translation, `bulbul:v3` TTS).
+  - `com.itantra.voice.pipeline`: `SpeechPipeline` contract with two implementations —
+    `OnDeviceSpeechPipeline` (platform `SpeechRecognizer` with `EXTRA_PREFER_OFFLINE` plus
+    platform `TextToSpeech`, the default) and `SarvamSpeechPipeline` (opt-in cloud).
+    `FallbackSpeechPipeline` resolves which one serves an utterance before capture starts.
+  - `com.itantra.voice.transport`: Wi-Fi Direct discovery, persistent framed TCP link.
+  - `com.itantra.voice.network` *(opt-in)*: OkHttp client for the Sarvam endpoints,
+    used only when `sarvam.api.key` is configured.
   - `com.itantra.voice.data`: Language definitions (10 BCP-47 Indic languages), atomic file-based `FeedbackLogger` (`context.filesDir/feedback_logs.json`), and typed data models.
   - `com.itantra.voice.ui`: Jetpack Compose single-screen UI (`MainScreen`), unidirectional 7-state finite state machine (`MainViewModel`), tactile Hold-to-Speak PTT touch gesture handler, and human-readable error banners.
 
@@ -15,9 +29,9 @@ iTantra is an Android native multilingual voice communication prototype connecti
 | F1 | Native PTT Audio Recording | 16 kHz 16-bit Mono PCM capture via AudioRecord on Dispatchers.IO | M1 | ORIGINAL_REQUEST §R1 |
 | F2 | In-Memory PCM-to-WAV Encoder | Pure Kotlin 44-byte canonical RIFF WAV container encoder | M1 | ORIGINAL_REQUEST §R1 |
 | F3 | Runtime Mic Permission Handler | Runtime RECORD_AUDIO verification with user explanation | M2 | ORIGINAL_REQUEST §R1, §R4 |
-| F4 | Sarvam Saaras v3 STT Client | POST /speech-to-text multipart (model="saaras:v3", mode="transcribe") | M1 | ORIGINAL_REQUEST §R2 |
-| F5 | Sarvam Translate Client | POST /translate JSON (model="mayura:v1", mode="formal") | M1 | ORIGINAL_REQUEST §R2 |
-| F6 | Sarvam Bulbul v3 TTS Client | POST /text-to-speech JSON (model="bulbul:v3", speaker="meera", rate=16000) | M1 | ORIGINAL_REQUEST §R2 |
+| F4 | On-device STT | Platform `SpeechRecognizer`, `EXTRA_PREFER_OFFLINE`. Sarvam Saaras v3 as opt-in fallback | M1 | ORIGINAL_REQUEST §R2 |
+| F5 | Translation | Sarvam Mayura v1 when a key is present; offline path relays text verbatim (known gap) | M1 | ORIGINAL_REQUEST §R2 |
+| F6 | On-device TTS | Platform `TextToSpeech` rendered to WAV. Sarvam Bulbul v3 as opt-in fallback | M1 | ORIGINAL_REQUEST §R2 |
 | F7 | Native WAV Audio Player | Base64 WAV decode and streaming via MediaPlayer without pops | M1 | ORIGINAL_REQUEST §R2 |
 | F8 | Replay Audio Trigger | Replays cached translated speech without re-querying APIs | M2 | ORIGINAL_REQUEST §R3 |
 | F9 | Single-Screen Compose View | Unified screen: Header, Selectors, PTT button, Cards, Feedback | M2 | ORIGINAL_REQUEST §R3 |
@@ -42,13 +56,14 @@ iTantra is an Android native multilingual voice communication prototype connecti
 
 ## Interface Contracts
 
-### Audio Engine ↔ Network Pipeline
-- `AudioRecorder.stopRecording(): ByteArray` -> returns raw 16 kHz Mono 16-bit PCM byte array.
+### Audio Engine ↔ Speech Pipeline
+- `AudioRecorder.stopRecording(): ByteArray` — **suspending**; awaits the capture coroutine's drain and returns raw 16 kHz mono 16-bit PCM.
 - `WavEncoder.encode(pcmData: ByteArray, sampleRate: Int = 16000, channels: Int = 1, bitsPerSample: Int = 16): ByteArray` -> returns canonical 44-byte RIFF WAV.
-- `SarvamApiClient.transcribe(wavData: ByteArray, languageCode: String): Result<SpeechResponse>`
-- `SarvamApiClient.translate(text: String, sourceLang: String, targetLang: String): Result<TranslationResponse>`
-- `SarvamApiClient.synthesize(text: String, targetLang: String, speaker: String = "meera"): Result<TtsResponse>`
-- `AudioPlayer.playBase64Wav(base64Wav: String, onComplete: () -> Unit, onError: (Throwable) -> Unit)`
+- `SpeechPipeline.transcribe(wavData: ByteArray, source: Language): Result<TranscriptionResult>`
+- `SpeechPipeline.translate(text: String, source: Language, target: Language): Result<TranslationResult>`
+- `SpeechPipeline.synthesize(text: String, target: Language, isEmergency: Boolean): Result<SynthesisResult>`
+- `SpeechPipeline.prepare()` — resolves the active engine before capture begins.
+- `AudioPlayer.playWavBytes(wavBytes: ByteArray, isEmergency: Boolean, onComplete, onError)`
 
 ### ViewModel ↔ UI Contract
 - `MainViewModel.uiState: StateFlow<MainUiState>`
@@ -60,6 +75,8 @@ iTantra is an Android native multilingual voice communication prototype connecti
   - `hasAudioToReplay`: `Boolean`
   - `errorMessage`: `String?`
   - `latencies`: `LatencyStats`
+  - `isEmergencyMode`: `Boolean` — armed alert mode
+  - `engineName`: `String` — active speech engine, shown in the status line
 - Events:
   - `onPttPress()`
   - `onPttRelease()`
@@ -67,6 +84,7 @@ iTantra is an Android native multilingual voice communication prototype connecti
   - `onTargetLanguageChange(Language)`
   - `onReplayAudio()`
   - `onFeedback(Boolean)`
+  - `onToggleEmergencyMode()`
   - `onDismissError()`
 
 ### Feedback Logger Contract

@@ -4,6 +4,7 @@ import com.itantra.voice.transport.socket.PersistentTcpSocketManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -59,9 +60,17 @@ class PersistentTcpSocketTest {
         // 1. Client sends to Server: "HELLO FROM ITANTRA"
         val testMessage = TransportMessage.createTestMessage(sourceLang = "hi-IN", targetLang = "en-IN")
 
+        // incomingMessages has no replay buffer (a replay buffer re-delivers the last
+        // message to every new collector, which made the receiving phone speak twice).
+        // The collector must therefore be attached before the sender writes, so wait for
+        // the coroutine to actually reach `first()` rather than assuming it has.
+        val serverSubscribed = kotlinx.coroutines.CompletableDeferred<Unit>()
         val serverReceivedDeferred = async {
-            serverManager.incomingMessages.first()
+            serverManager.incomingMessages
+                .onSubscription { serverSubscribed.complete(Unit) }
+                .first()
         }
+        serverSubscribed.await()
 
         val sendResult = clientManager.send(testMessage)
         assertTrue("Client send should succeed", sendResult.isSuccess)
@@ -79,9 +88,13 @@ class PersistentTcpSocketTest {
             type = TransportMessageType.TRANSLATION
         )
 
+        val clientSubscribed = kotlinx.coroutines.CompletableDeferred<Unit>()
         val clientReceivedDeferred = async {
-            clientManager.incomingMessages.first()
+            clientManager.incomingMessages
+                .onSubscription { clientSubscribed.complete(Unit) }
+                .first()
         }
+        clientSubscribed.await()
 
         val replyResult = serverManager.send(replyMessage)
         assertTrue("Server reply should succeed", replyResult.isSuccess)

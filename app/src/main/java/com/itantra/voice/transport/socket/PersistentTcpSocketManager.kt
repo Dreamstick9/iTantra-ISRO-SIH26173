@@ -6,8 +6,10 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -37,40 +39,70 @@ class PersistentTcpSocketManager(
 
     private val log = Logger.getLogger("PersistentTcpSocketManager")
 
+    // replay must be 0: a replay buffer causes any new or re-subscribing collector to
+    // immediately receive the previous message, which made the receiving phone speak
+    // the last transmission again on every reconnect and on every ViewModel rebind.
     private val _incomingMessages = MutableSharedFlow<TransportMessage>(
-        replay = 1,
+        replay = 0,
         extraBufferCapacity = 64
     )
-    val incomingMessages: Flow<TransportMessage> = _incomingMessages.asSharedFlow()
+    /**
+     * Exposed as [SharedFlow] rather than [Flow] so callers can observe subscription
+     * (there is no replay buffer, so a message emitted before a collector attaches is
+     * gone). [com.itantra.voice.transport.TransportEngine] still narrows it to [Flow].
+     */
+    val incomingMessages: SharedFlow<TransportMessage> = _incomingMessages.asSharedFlow()
 
 
     private val writeMutex = Mutex()
     private val isConnectedFlag = AtomicBoolean(false)
     val isConnected: Boolean get() = isConnectedFlag.get()
 
+    @Volatile
     private var serverSocket: ServerSocket? = null
+
+    @Volatile
     private var activeSocket: Socket? = null
+    @Volatile
     private var readerJob: Job? = null
+
+    @Volatile
     private var acceptJob: Job? = null
+
+    @Volatile
+    private var connectJob: Job? = null
 
     /**
      * Starts a ServerSocket listening on the specified port (typically for Group Owner role)
      * and awaits an incoming connection from the client peer.
      */
     fun startServer(port: Int = DEFAULT_PORT) {
-        disconnect()
+        isConnectedFlag.set(false)
+        closeAll()
 
         acceptJob = scope.launch(ioDispatcher) {
             try {
-                val server = ServerSocket(port).apply {
+                // Bind explicitly so SO_REUSEADDR is applied *before* binding; setting it
+                // on an already-bound ServerSocket(port) is a no-op and left the port
+                // unusable during TIME_WAIT, breaking every reconnect after the first.
+                val server = ServerSocket().apply {
                     reuseAddress = true
+                    bind(InetSocketAddress(port), 1)
                 }
                 serverSocket = server
                 log.info("Server listening on port $port, awaiting peer connection...")
 
-                val client = server.accept()
-                log.info("Client connected from ${client.inetAddress.hostAddress}")
-                setupActiveSocket(client)
+                // Loop: the previous single accept() left the group owner deaf after the
+                // first peer disconnected, so reconnecting required restarting the app.
+                while (isActive && !server.isClosed) {
+                    val client = server.accept()
+                    log.info("Client connected from ${client.inetAddress.hostAddress}")
+                    setupActiveSocket(client)
+                    // Serve one peer at a time; wait until it drops before accepting again.
+                    while (isActive && isConnectedFlag.get()) {
+                        delay(ACCEPT_POLL_INTERVAL_MS)
+                    }
+                }
             } catch (e: Exception) {
                 if (isActive) {
                     log.warning("ServerSocket accept error: ${e.message}")
@@ -84,9 +116,10 @@ class PersistentTcpSocketManager(
      * Connects as a TCP client to the specified host IP and port (typically Group Owner IP).
      */
     fun connectClient(host: String, port: Int = DEFAULT_PORT, timeoutMs: Int = 10000) {
-        disconnect()
+        isConnectedFlag.set(false)
+        closeAll()
 
-        scope.launch(ioDispatcher) {
+        connectJob = scope.launch(ioDispatcher) {
             try {
                 log.info("Connecting to $host:$port (timeout: ${timeoutMs}ms)...")
                 val socket = Socket().apply {
@@ -105,7 +138,8 @@ class PersistentTcpSocketManager(
      * Adopts an already-connected socket (useful for tests or existing links).
      */
     fun adoptConnectedSocket(socket: Socket) {
-        disconnect()
+        isConnectedFlag.set(false)
+        closeAll()
         setupActiveSocket(socket)
     }
 
@@ -174,36 +208,48 @@ class PersistentTcpSocketManager(
     }
 
     /**
-     * Closes the active socket, server socket, and cancels coroutines.
+     * Fully tears down the link: active peer, listening socket and all coroutines.
      */
     fun disconnect() {
-        if (!isConnectedFlag.getAndSet(false)) {
-            // Already disconnected, but still clean up lingering sockets/jobs
-            closeSockets()
-            return
-        }
-
-        closeSockets()
-        onDisconnected("Disconnected")
+        val wasConnected = isConnectedFlag.getAndSet(false)
+        closeAll()
+        if (wasConnected) onDisconnected("Disconnected")
     }
 
+    /**
+     * Handles an unexpected drop of the *peer* while leaving a listening server socket
+     * intact, so the group owner can accept the peer again when it comes back.
+     */
     private fun handleDisconnect(reason: String) {
         if (isConnectedFlag.getAndSet(false)) {
-            closeSockets()
+            closePeerSocket()
             onDisconnected(reason)
         }
     }
 
-    private fun closeSockets() {
+    /**
+     * Closes only the peer connection. Deliberately does not touch [acceptJob] or
+     * [serverSocket]: cancelling the accept job from here would cancel the very
+     * coroutine that is waiting to re-accept the peer.
+     */
+    private fun closePeerSocket() {
         readerJob?.cancel()
         readerJob = null
-        acceptJob?.cancel()
-        acceptJob = null
 
         try {
             activeSocket?.close()
         } catch (ignored: Exception) {}
         activeSocket = null
+    }
+
+    /** Closes the peer connection, the listening socket, and every coroutine. */
+    private fun closeAll() {
+        closePeerSocket()
+
+        acceptJob?.cancel()
+        acceptJob = null
+        connectJob?.cancel()
+        connectJob = null
 
         try {
             serverSocket?.close()
@@ -213,5 +259,8 @@ class PersistentTcpSocketManager(
 
     companion object {
         const val DEFAULT_PORT = 8888
+
+        /** How often the accept loop checks whether the served peer has dropped. */
+        const val ACCEPT_POLL_INTERVAL_MS = 200L
     }
 }

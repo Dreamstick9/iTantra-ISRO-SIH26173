@@ -2,23 +2,44 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Required to open the local Wi-Fi Direct TCP socket (192.168.49.x). Also used by
+         the optional Sarvam cloud pipeline; the default on-device pipeline needs no network. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Raising the alarm stream for emergency announcements. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- Wi-Fi Direct (P2P) Permissions -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-    <!-- Android 12 and below requires location for Wi-Fi P2P discovery -->
+    <!-- Android 12 and below requires location for Wi-Fi P2P discovery. From Android 12
+         a FINE request must be accompanied by COARSE, because the user may grant only
+         the approximate one. Both are capped at API 32: on 13+ NEARBY_WIFI_DEVICES
+         replaces them and the app never asks for location at all. -->
     <uses-permission
         android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
         android:maxSdkVersion="32" />
     <!-- Android 13+ (API 33+) requires NEARBY_WIFI_DEVICES -->
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
 
+
+    <!-- Android 11+ package visibility: without these the platform speech and
+         text-to-speech engines are invisible to the app and the offline pipeline
+         silently reports "no engine installed". -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -30,7 +51,9 @@
         android:theme="@style/Theme.ITantra">
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="uiMode|keyboardHidden|screenSize|smallestScreenSize|screenLayout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

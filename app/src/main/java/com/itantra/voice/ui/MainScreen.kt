@@ -1,6 +1,5 @@
 package com.itantra.voice.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,36 +8,36 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.itantra.voice.ui.components.AppHeader
-import com.itantra.voice.ui.components.ErrorBanner
-import com.itantra.voice.ui.components.LanguageSelectorSection
-import com.itantra.voice.ui.components.P2pConnectionBar
-import com.itantra.voice.ui.components.PttButton
-
-import com.itantra.voice.ui.components.QuickFeedbackBar
-import com.itantra.voice.ui.components.TelemetryBar
-import com.itantra.voice.ui.components.TextCardsSection
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.itantra.voice.transport.TransportConnectionState
+import com.itantra.voice.ui.components.BottomControls
+import com.itantra.voice.ui.components.LanguageRow
+import com.itantra.voice.ui.components.LatencyStrip
+import com.itantra.voice.ui.components.NoticeBar
+import com.itantra.voice.ui.components.PairingSheet
+import com.itantra.voice.ui.components.StatusBar
+import com.itantra.voice.ui.components.TalkButton
+import com.itantra.voice.ui.components.TranscriptPanel
 
 /**
- * Single-Screen Compose transceiver UI for iTantra.
- * Implements strict visual hierarchy:
- * 1. App Header & Status Chip
- * 2. Telemetry Bar (latency readouts)
- * 3. Error Banner (animated expandable card)
- * 4. Language Selectors (Source & Target with swap button)
- * 5. Dual Text Cards (Source recognized text & Target translated text + Replay)
- * 6. Quick Feedback Bar (👍 / 👎)
- * 7. Tactile Push-to-Talk (PTT) Button
+ * The whole app: one screen, read top to bottom.
+ *
+ *   status  ->  languages  ->  transcript  ->  talk button  ->  controls
+ *
+ * Everything above the talk button is information; the button is the only large target.
+ * The transcript takes the flexible space and scrolls internally, so the button stays
+ * anchored at the bottom on every screen size rather than being pushed off by long text.
  */
 @Composable
 fun MainScreen(
@@ -46,117 +45,123 @@ fun MainScreen(
     modifier: Modifier = Modifier,
     onRequirePermission: () -> Unit = {}
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var showPairing by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            // Top Section (Header + Telemetry + Error Banner + Language Selectors)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false),
-                verticalArrangement = Arrangement.Top
-            ) {
-                AppHeader(state = uiState.state)
+        Column(modifier = Modifier.fillMaxSize()) {
 
-                Spacer(modifier = Modifier.height(4.dp))
+            StatusBar(
+                transportState = uiState.transportState,
+                peerName = uiState.connectedPeer?.name,
+                engineName = uiState.engineName,
+                onClick = {
+                    if (uiState.transportState == TransportConnectionState.DISCONNECTED) {
+                        viewModel.onStartDiscovery()
+                    }
+                    showPairing = true
+                }
+            )
 
-                TelemetryBar(latencies = uiState.latencies)
+            NoticeBar(
+                message = uiState.errorMessage,
+                onDismiss = { viewModel.onDismissError() },
+                onRetry = onRequirePermission
+            )
 
-                Spacer(modifier = Modifier.height(6.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
-                P2pConnectionBar(
-                    state = uiState.transportState,
-                    connectedPeer = uiState.connectedPeer,
-                    discoveredPeers = uiState.discoveredPeers,
-                    onStartDiscovery = { viewModel.onStartDiscovery() },
-                    onStopDiscovery = { viewModel.onStopDiscovery() },
-                    onConnectPeer = { viewModel.onConnectPeer(it) },
-                    onDisconnect = { viewModel.onDisconnectTransport() },
-                    onSendTestMessage = { viewModel.onSendTestMessage() }
-                )
+            Spacer(Modifier.height(20.dp))
 
-                Spacer(modifier = Modifier.height(6.dp))
+            LanguageRow(
+                source = uiState.sourceLanguage,
+                target = uiState.targetLanguage,
+                isEnabled = uiState.canRecord,
+                onSourceChange = viewModel::onSourceLanguageChange,
+                onTargetChange = viewModel::onTargetLanguageChange,
+                onSwap = viewModel::onSwapLanguages
+            )
 
-                ErrorBanner(
-                    errorMessage = uiState.errorMessage,
-                    onDismiss = { viewModel.onDismissError() },
-                    onRetryPermission = onRequirePermission
-                )
+            Spacer(Modifier.height(20.dp))
 
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                LanguageSelectorSection(
+            // Flexible middle: absorbs leftover height so the button never moves.
+            Box(modifier = Modifier.weight(1f)) {
+                TranscriptPanel(
                     sourceLanguage = uiState.sourceLanguage,
+                    sourceText = uiState.sourceTranscript,
                     targetLanguage = uiState.targetLanguage,
-                    isEnabled = !uiState.isBusy && uiState.state != PttState.RECORDING,
-                    onSourceChange = { viewModel.onSourceLanguageChange(it) },
-                    onTargetChange = { viewModel.onTargetLanguageChange(it) },
-                    onSwap = { viewModel.onSwapLanguages() }
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Text Display Cards
-                TextCardsSection(
-                    sourceLanguage = uiState.sourceLanguage,
-                    sourceTranscript = uiState.sourceTranscript,
-                    targetLanguage = uiState.targetLanguage,
-                    translatedText = uiState.translatedText,
-                    hasAudioToReplay = uiState.hasAudioToReplay,
-                    isPlaying = uiState.state == PttState.PLAYING,
-                    isBusy = uiState.isBusy,
-                    onReplayAudio = { viewModel.onReplayAudio() }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Quick Feedback Bar
-                QuickFeedbackBar(
-                    feedbackSubmitted = uiState.feedbackSubmitted,
-                    isEnabled = uiState.translatedText.isNotBlank() && !uiState.isBusy && uiState.state != PttState.RECORDING,
-                    onFeedback = { viewModel.onFeedback(it) }
+                    outputText = uiState.translatedText,
+                    isRemote = uiState.isRemoteMessage,
+                    isAlert = uiState.isAlertPlaying || uiState.isEmergencyMode,
+                    canReplay = uiState.hasAudioToReplay,
+                    onReplay = viewModel::onReplayAudio
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            LatencyStrip(latencies = uiState.latencies)
 
-            // Bottom Section: Tactile Push-to-Talk (PTT) Button
+            Spacer(Modifier.height(16.dp))
+
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
+                modifier = Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
-                PttButton(
+                TalkButton(
                     state = uiState.state,
                     isHolding = uiState.isHolding,
                     amplitude = uiState.amplitude,
                     isEnabled = !uiState.isBusy,
                     onPress = {
-                        if (!uiState.micPermissionGranted) {
-                            onRequirePermission()
-                        } else {
+                        if (uiState.micPermissionGranted) {
                             viewModel.onPttPress()
+                        } else {
+                            onRequirePermission()
                         }
                     },
                     onRelease = {
-                        if (uiState.micPermissionGranted) {
-                            viewModel.onPttRelease()
-                        }
+                        if (uiState.micPermissionGranted) viewModel.onPttRelease()
                     }
                 )
             }
+
+            Spacer(Modifier.height(20.dp))
+
+            BottomControls(
+                isEmergencyArmed = uiState.isEmergencyMode,
+                onToggleEmergency = viewModel::onToggleEmergencyMode,
+                canRateTranslation = uiState.translatedText.isNotBlank() && uiState.canRecord,
+                feedbackSubmitted = uiState.feedbackSubmitted,
+                onFeedback = viewModel::onFeedback
+            )
+
+            Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showPairing) {
+        PairingSheet(
+            state = uiState.transportState,
+            peers = uiState.discoveredPeers,
+            connectedPeer = uiState.connectedPeer,
+            onScan = viewModel::onStartDiscovery,
+            onStopScan = viewModel::onStopDiscovery,
+            onConnect = { peer ->
+                viewModel.onConnectPeer(peer)
+                showPairing = false
+            },
+            onDisconnect = {
+                viewModel.onDisconnectTransport()
+                showPairing = false
+            },
+            onDismiss = {
+                if (uiState.transportState == TransportConnectionState.DISCOVERING) {
+                    viewModel.onStopDiscovery()
+                }
+                showPairing = false
+            }
+        )
     }
 }

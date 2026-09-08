@@ -2,6 +2,7 @@ package com.itantra.voice.audio
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import java.io.File
 import java.util.Base64
@@ -63,16 +64,52 @@ class DefaultNativeMediaPlayer : NativeMediaPlayer {
 }
 
 /**
- * Native audio player for decoded Base64 WAV speech responses from Sarvam Bulbul v3.
+ * Raises the alarm stream to maximum for emergency announcements.
+ *
+ * Abstracted so the player stays constructible (and testable) without an Android
+ * Context; the production implementation is [SystemAlarmVolumeController].
+ */
+interface AlarmVolumeController {
+    fun raiseToMax()
+}
+
+/** No-op controller used when the player was built without a Context. */
+object NoOpAlarmVolumeController : AlarmVolumeController {
+    override fun raiseToMax() = Unit
+}
+
+/**
+ * Sets STREAM_ALARM to its maximum so an emergency announcement is audible even when
+ * the handset's media volume is turned down, per the SIH26173 alert requirement.
+ */
+class SystemAlarmVolumeController(private val context: Context) : AlarmVolumeController {
+    override fun raiseToMax() {
+        runCatching {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            am.setStreamVolume(
+                AudioManager.STREAM_ALARM,
+                am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
+                0
+            )
+        }
+    }
+}
+
+/**
+ * Native audio player for synthesised WAV speech.
  * Streams playback via [MediaPlayer] without pops or resource leaks, writing to an
  * app-private temporary cache file and atomically deleting it upon playback completion.
  */
 class AudioPlayer(
     private val cacheDir: File,
-    private val playerFactory: () -> NativeMediaPlayer = { DefaultNativeMediaPlayer() }
+    private val playerFactory: () -> NativeMediaPlayer = { DefaultNativeMediaPlayer() },
+    private val alarmVolumeController: AlarmVolumeController = NoOpAlarmVolumeController
 ) {
 
-    constructor(context: Context) : this(context.cacheDir)
+    constructor(context: Context) : this(
+        cacheDir = context.cacheDir,
+        alarmVolumeController = SystemAlarmVolumeController(context)
+    )
 
     private val playerLock = Any()
     private var activePlayer: NativeMediaPlayer? = null
@@ -142,11 +179,16 @@ class AudioPlayer(
                 currentTempFile = tempFile
 
                 val player = playerFactory()
+                // SIH26173: alert traffic must be announced at the highest volume and
+                // must not be silenced by the media stream being turned down, so it is
+                // routed to USAGE_ALARM. Ordinary speech uses the media stream.
                 val usage = if (isEmergency) {
                     AudioAttributes.USAGE_ALARM
                 } else {
-                    AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
+                    AudioAttributes.USAGE_MEDIA
                 }
+
+                if (isEmergency) alarmVolumeController.raiseToMax()
 
                 player.setAudioAttributes(AudioAttributes.CONTENT_TYPE_SPEECH, usage)
                 player.setDataSource(tempFile.absolutePath)
@@ -167,8 +209,11 @@ class AudioPlayer(
                 }
 
                 player.prepare()
-                player.start()
+                // Publish before start(): playback of a very short clip can complete
+                // synchronously, and the completion listener nulls activePlayer. Assigning
+                // after start() would resurrect an already-released player.
                 activePlayer = player
+                player.start()
             } catch (e: Exception) {
                 stopAndRelease()
                 onError(IllegalStateException("Failed to initiate audio playback: ${e.message}", e))
