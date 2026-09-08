@@ -41,7 +41,7 @@ sealed class SarvamApiException(message: String, cause: Throwable? = null) : Exc
  */
 class SarvamApiClient(
     private val apiKeyProvider: () -> String = { BuildConfig.SARVAM_API_KEY },
-    private val baseUrl: String = "https://api.sarvam.ai/",
+    private val baseUrl: String = BuildConfig.SARVAM_BASE_URL,
     customClient: OkHttpClient? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {

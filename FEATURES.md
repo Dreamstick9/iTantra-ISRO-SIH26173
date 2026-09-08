@@ -238,7 +238,15 @@ lint clean
 ```
 
 `./run-tests.sh --device` runs everything headless, booting an emulator if none is
-attached. No test needs a microphone, a speaker, a network or a second handset — fakes are
+attached.
+
+**Full cloud pipeline, end to end, without real keys:** `tools/mock_cloud.py` stands in
+for both Sarvam and ElevenLabs, returning the exact response shapes the app parses and a
+genuine 16 kHz WAV for TTS. Point a debug build at it via `local.properties`
+(`itantra.debug.sarvam.url` / `itantra.debug.elevenlabs.url` = `http://10.0.2.2:8797/`)
+and every stage — capture → recognise → translate → synthesise → play — runs over real HTTP
+on the emulator. Release builds ignore these keys; cleartext to `10.0.2.2` is permitted
+only by a network-security config that exists solely in `src/debug`. No test needs a microphone, a speaker, a network or a second handset — fakes are
 injected at the `NativeAudioRecord`, `NativeMediaPlayer`, `SpeechPipeline`,
 `TransportEngine` and `LocationProvider` seams. The ElevenLabs client's actual outgoing requests — endpoint,
 auth header, model ids, output format — are asserted against a capturing interceptor,

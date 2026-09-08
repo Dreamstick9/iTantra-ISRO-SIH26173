@@ -595,7 +595,9 @@ class MainViewModel(
         }
 
         _uiState.update { it.copy(latencies = finalLatencies) }
-        playSynthesis(synthesis.wavBytes, isEmergency)
+        // playWavBytes writes the clip to disk and runs MediaPlayer.prepare() synchronously;
+        // runPipeline executes on Main, so hop to IO to keep that off the UI thread.
+        withContext(ioDispatcher) { playSynthesis(synthesis.wavBytes, isEmergency) }
     }
 
     /**

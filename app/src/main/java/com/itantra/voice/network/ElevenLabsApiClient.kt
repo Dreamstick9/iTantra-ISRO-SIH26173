@@ -1,5 +1,6 @@
 package com.itantra.voice.network
 
+import com.itantra.voice.BuildConfig
 import com.itantra.voice.data.Language
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +45,7 @@ sealed class ElevenLabsException(message: String, cause: Throwable? = null) : Ex
  */
 class ElevenLabsApiClient(
     private val apiKeyProvider: () -> String,
-    private val baseUrl: String = "https://api.elevenlabs.io/",
+    private val baseUrl: String = BuildConfig.ELEVENLABS_BASE_URL,
     customClient: OkHttpClient? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {

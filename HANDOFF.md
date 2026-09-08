@@ -515,6 +515,7 @@ The seams to inject at:
 | Seam | Interface | Used by |
 |---|---|---|
 | Position | `LocationProvider` | `MainViewModel.setLocationProvider(...)` |
+| Cloud endpoints | `BuildConfig.*_BASE_URL` | `local.properties` `itantra.debug.*.url` → `tools/mock_cloud.py` (debug only) |
 | Microphone | `NativeAudioRecord` | `AudioRecorder(recordProvider = { ... })` |
 | Speaker | `NativeMediaPlayer` | `AudioPlayer(cacheDir, playerFactory = { ... })` |
 | Speech engine | `SpeechPipeline` | `MainViewModel(speechPipeline = ...)` |

@@ -10,7 +10,7 @@ and the receiving handset speaks it aloud.
 | Platform | Android 8.0+ (minSdk 26, targetSdk 35) |
 | Language | Kotlin 2.3, Jetpack Compose |
 | Build | Gradle 9.1, AGP 9.0.1, JDK 17 toolchain |
-| Tests | 258 unit, 10 instrumented |
+| Tests | 258 unit, 10 instrumented, full pipeline E2E against a mock cloud |
 
 > **What can it do?** [`FEATURES.md`](FEATURES.md) — every feature, how it works, and how
 > to demo it.

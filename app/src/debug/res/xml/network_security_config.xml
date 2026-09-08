@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG ONLY. Permits cleartext to the emulator's host loopback (10.0.2.2) so the
+     cloud pipeline can be exercised end-to-end against tools/mock_cloud.py.
+     This file lives in src/debug and is absent from release builds, where the
+     platform default (cleartext blocked) applies. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

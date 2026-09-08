@@ -27,6 +27,11 @@ val rawElevenKey: String = localProperties.getProperty("elevenlabs.api.key")
     ?: ""
 val elevenLabsApiKey: String = rawElevenKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
 
+// Debug-only: point the cloud clients at a local mock so the whole pipeline can be
+// exercised end-to-end on an emulator without real keys. Ignored in release.
+val debugSarvamUrl: String = localProperties.getProperty("itantra.debug.sarvam.url")?.trim().orEmpty()
+val debugElevenUrl: String = localProperties.getProperty("itantra.debug.elevenlabs.url")?.trim().orEmpty()
+
 val forceOffline: Boolean = (
     localProperties.getProperty("itantra.force.offline")
         ?: System.getenv("ITANTRA_FORCE_OFFLINE")
@@ -48,11 +53,16 @@ android {
         buildConfigField("String", "SARVAM_API_KEY", "\"$sarvamApiKey\"")
         buildConfigField("String", "ELEVENLABS_API_KEY", "\"$elevenLabsApiKey\"")
         buildConfigField("boolean", "FORCE_OFFLINE", "$forceOffline")
+        buildConfigField("String", "SARVAM_BASE_URL", "\"${debugSarvamUrl.ifBlank { "https://api.sarvam.ai/" }}\"")
+        buildConfigField("String", "ELEVENLABS_BASE_URL", "\"${debugElevenUrl.ifBlank { "https://api.elevenlabs.io/" }}\"")
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Never let a debug mock URL leak into a release build.
+            buildConfigField("String", "SARVAM_BASE_URL", "\"https://api.sarvam.ai/\"")
+            buildConfigField("String", "ELEVENLABS_BASE_URL", "\"https://api.elevenlabs.io/\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
