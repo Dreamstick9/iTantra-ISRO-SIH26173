@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.itantra.voice.audio.AudioPlayer
 import com.itantra.voice.audio.SystemAlarmVolumeController
+import com.itantra.voice.network.SarvamApiClient
 import com.itantra.voice.pipeline.FallbackSpeechPipeline
 import com.itantra.voice.pipeline.OnDeviceSpeechPipeline
 import com.itantra.voice.pipeline.SarvamSpeechPipeline
@@ -104,10 +105,23 @@ class MainActivity : ComponentActivity() {
     /**
      * Builds the speech pipeline.
      *
-     * The on-device engine is preferred because SIH26173 mandates fully offline
-     * operation; the Sarvam cloud engine is used only as a fallback, and only when a
-     * real key has been configured in `local.properties`. With no key the composite
-     * still works, entirely offline.
+     * Which engine leads is decided by configuration, not by a runtime probe:
+     *
+     * - `itantra.force.offline=true` pins the on-device engine and never touches the
+     *   network. This is the build to demo for SIH26173, which mandates a fully offline
+     *   pipeline; it is provably air-gapped regardless of what else is configured.
+     * - Otherwise a real `sarvam.api.key` means the developer explicitly opted into the
+     *   cloud engine, so it leads and on-device is the fallback.
+     * - With no key at all, on-device leads and the app runs entirely offline.
+     *
+     * Preferring on-device whenever it merely *reports* availability does not work:
+     * `SpeechRecognizer.isRecognitionAvailable()` is true on any phone that has a
+     * recognition service, even when no offline language pack is installed for the
+     * chosen language. That made the on-device engine always win and a configured
+     * Sarvam key never get used, and recognition then failed at runtime with
+     * "language pack not installed". A language pack's presence cannot be queried
+     * without attempting recognition, so the choice is made from explicit
+     * configuration instead of an unreliable probe.
      */
     private fun buildSpeechPipeline(): SpeechPipeline {
         val onDevice = OnDeviceSpeechPipeline(
@@ -115,9 +129,19 @@ class MainActivity : ComponentActivity() {
             cacheDir = cacheDir,
             recognizer = PlatformSpeechRecognizer(applicationContext)
         )
+
+        if (BuildConfig.FORCE_OFFLINE) {
+            return onDevice.also { speechPipeline = it }
+        }
+
         val cloud = SarvamSpeechPipeline()
-        return FallbackSpeechPipeline(preferred = onDevice, fallback = cloud)
-            .also { speechPipeline = it }
+        val hasCloudKey = !SarvamApiClient.isPlaceholderKey(BuildConfig.SARVAM_API_KEY)
+
+        return if (hasCloudKey) {
+            FallbackSpeechPipeline(preferred = cloud, fallback = onDevice)
+        } else {
+            FallbackSpeechPipeline(preferred = onDevice, fallback = cloud)
+        }.also { speechPipeline = it }
     }
 
     private fun hasMicPermission(): Boolean =

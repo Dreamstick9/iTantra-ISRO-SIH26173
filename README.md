@@ -10,7 +10,7 @@ and the receiving handset speaks it aloud.
 | Platform | Android 8.0+ (minSdk 26, targetSdk 35) |
 | Language | Kotlin 2.3, Jetpack Compose |
 | Build | Gradle 9.1, AGP 9.0.1, JDK 17 toolchain |
-| Tests | 201 unit, 7 instrumented |
+| Tests | 205 unit, 7 instrumented |
 
 > **Migrating from an older checkout of this project?** Read
 > [`HANDOFF.md`](HANDOFF.md) — it covers where to pull the new code from, the breaking
@@ -78,10 +78,14 @@ push-to-talk flow drives either implementation:
   accuracy and real translation between Indic languages, but requires a key and a network,
   which the problem statement does not permit for a submission.
 
-`FallbackSpeechPipeline` picks between them. The choice is settled in `prepare()` **before**
-capture begins, not per call: the offline engine captures through its own recogniser
-session while the cloud engine expects a recorded WAV, so switching mid-utterance would
-leave the audio captured by nobody.
+`FallbackSpeechPipeline` picks between them, and the choice comes from **configuration**
+rather than a runtime probe — `SpeechRecognizer.isRecognitionAvailable()` is true on any
+phone with a recognition service even when no offline language pack is installed, so
+probing would always pick the offline engine and then fail mid-utterance.
+
+The choice is settled in `prepare()` **before** capture begins, not per call: the offline
+engine captures through its own recogniser session while the cloud engine expects a
+recorded WAV, so switching mid-utterance would leave the audio captured by nobody.
 
 > **Offline translation is a pass-through.** No open-source on-device Indic translation
 > model is bundled, so the offline pipeline relays recognised text verbatim rather than
@@ -118,14 +122,34 @@ org.gradle.java.installations.paths=/opt/homebrew/opt/openjdk@17/libexec/openjdk
 
 ### Configure
 
-`local.properties` is git-ignored. Create it with your SDK path:
+`local.properties` is git-ignored. Create it:
 
 ```properties
 sdk.dir=/Users/you/Library/Android/sdk
 
-# Optional. Leave blank to run fully offline on the on-device pipeline.
+# Set a key and the Sarvam cloud engine leads (no offline language pack needed).
+# Leave blank and the app runs entirely on the offline on-device engine.
 sarvam.api.key=
+
+# Set true to pin the offline engine even if a key is present.
+# Use this for the SIH26173 demo: the cloud client is never constructed.
+itantra.force.offline=false
 ```
+
+Which engine runs:
+
+| `sarvam.api.key` | `itantra.force.offline` | Engine | Offline pack needed? | Network needed? |
+|---|---|---|---|---|
+| set | `false` | Sarvam Cloud | No | Yes |
+| blank | `false` | On-device | Yes | No |
+| anything | `true` | On-device, pinned | Yes | No |
+
+The active engine is shown in the status line at the top of the screen.
+
+> The on-device engine needs an offline voice pack installed on the device
+> (Settings → System → Languages & input → Voice input → Offline speech recognition).
+> Without one it reports *"That language pack is not installed for offline recognition."*
+> If you do not have a pack, set a `sarvam.api.key` and the cloud engine is used instead.
 
 ### Build and run
 
@@ -147,7 +171,7 @@ Everything runs headless — no human interaction, no physical device.
 
 | Suite | Count | Covers |
 |---|---|---|
-| Unit (`app/src/test`) | 201 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
+| Unit (`app/src/test`) | 205 | WAV encoding, capture lifecycle, playback routing, the 7-state FSM, wire framing, TCP link, engine selection, HTTP error mapping |
 | Instrumented (`app/src/androidTest`) | 7 | Real Compose tree on an emulator: gestures, transcript rendering, language swap, emergency arming, permission gating |
 
 Both suites inject fakes at the `NativeAudioRecord` / `NativeMediaPlayer` / `SpeechPipeline`

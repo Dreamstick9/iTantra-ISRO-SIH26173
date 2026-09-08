@@ -75,7 +75,7 @@ is strongly preferred.
 ### First thing to do after you have it
 
 ```bash
-./run-tests.sh          # expect: unit 201 passed, lint clean
+./run-tests.sh          # expect: unit 205 passed, lint clean
 ```
 
 If that passes, you have a working tree. §7 covers the setup this needs (JDK 17 + 21, SDK
@@ -84,18 +84,71 @@ almost always toolchain, not code.
 
 ---
 
+## 0.5 "It removed the API and I have no offline pack" — read this
+
+If you had the old cloud-only build working, you had a `sarvam.api.key` in
+`local.properties` and it will still work. **The Sarvam API was not removed.**
+`SarvamApiClient.kt`, `SarvamApiModels.kt` and `SarvamSpeechPipeline.kt` are all still in
+the tree. The pipeline is *pluggable*, not *offline-only*.
+
+Set your key and the cloud engine leads again:
+
+```properties
+# local.properties  (git-ignored — create it if it is missing)
+sdk.dir=/Users/you/Library/Android/sdk
+sarvam.api.key=YOUR_KEY_HERE
+itantra.force.offline=false
+```
+
+Rebuild. The status line at the top of the screen will read **SARVAM CLOUD**. No offline
+language pack is needed on that path.
+
+### The three configurations
+
+| `sarvam.api.key` | `itantra.force.offline` | Engine that leads | Needs an offline pack? | Needs network? |
+|---|---|---|---|---|
+| set | `false` | **Sarvam Cloud** (on-device is fallback) | No | Yes |
+| blank | `false` | **On-device** (cloud is fallback, unusable without a key) | Yes | No |
+| anything | `true` | **On-device**, pinned — the Sarvam client is never constructed | Yes | No |
+
+Use `itantra.force.offline=true` for the SIH26173 demo build. The brief forbids
+internet-hosted APIs, and with that flag the cloud client is never instantiated, so the
+claim is provable rather than asserted.
+
+### Why this needed a fix (and did bite people)
+
+Selection used to prefer the on-device engine whenever it *reported* being available. But
+`SpeechRecognizer.isRecognitionAvailable()` returns true on **any** phone that has a
+recognition service installed — whether or not an offline language pack exists for the
+language you picked. So on-device always won, a configured Sarvam key was never consulted,
+and recognition then failed at runtime with *"That language pack is not installed for
+offline recognition."*
+
+Android gives no way to query pack presence without attempting recognition, so the engine
+is now chosen from **explicit configuration** rather than from an unreliable probe. See
+`MainActivity.buildSpeechPipeline()` and `EngineSelectionTest`.
+
+### If you want the offline path anyway
+
+Install a pack on the device — Settings → System → Languages & input → Voice input → tap
+the gear next to Google → Offline speech recognition → download your language. An emulator
+image without Play Store cannot do this; use a physical device.
+
+---
+
 ## 1. The one-paragraph summary
 
 
-The app could not function. Every speech call went to Sarvam's cloud API keyed by
-`SARVAM_API_KEY`, which is git-ignored and absent, so the auth interceptor rejected every
-request before it left the device. That also violated the SIH26173 "fully offline"
-mandate. The speech engine is now behind an interface with a **fully offline on-device
-implementation as the default**, the cloud client is opt-in, ~15 real bugs (several
-concurrency) are fixed, the emergency-alert feature is wired up (it was dead code), and
-the UI is rebuilt on a two-colour system.
+The app could not function out of the box. Every speech call went to Sarvam's cloud API
+keyed by `SARVAM_API_KEY`, which is git-ignored and absent, so the auth interceptor
+rejected every request before it left the device. That also violated the SIH26173 "fully
+offline" mandate. The speech engine now sits behind an interface with **two working
+implementations** — a fully offline on-device engine and the original Sarvam cloud client
+— and which one leads is chosen from configuration (§0.5). Alongside that, ~15 real bugs
+(several concurrency) are fixed, the emergency-alert feature is wired up (it was dead
+code), and the UI is rebuilt on a two-colour system.
 
-Tests went 186 → **201 unit + 7 instrumented**, all passing, lint clean.
+Tests went 186 → **205 unit + 7 instrumented**, all passing, lint clean.
 
 ---
 
@@ -423,7 +476,7 @@ sarvam.api.key=
 Expected:
 
 ```
-  unit            201 tests  0 failures  0 errors   [PASS]
+  unit            205 tests  0 failures  0 errors   [PASS]
   instrumented      7 tests  0 failures  0 errors   [PASS]
 ```
 

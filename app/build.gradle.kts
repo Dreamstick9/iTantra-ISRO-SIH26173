@@ -18,6 +18,15 @@ val rawApiKey: String = localProperties.getProperty("sarvam.api.key")
     ?: ""
 val sarvamApiKey: String = rawApiKey.trim().removeSurrounding("\"").removeSurrounding("'").trim()
 
+// Pins the app to the fully offline on-device pipeline regardless of any configured
+// key. This is the build to demo for SIH26173, which forbids internet-hosted APIs:
+// with this set the Sarvam client is never constructed, so the claim is provable.
+val forceOffline: Boolean = (
+    localProperties.getProperty("itantra.force.offline")
+        ?: System.getenv("ITANTRA_FORCE_OFFLINE")
+        ?: "false"
+    ).trim().toBoolean()
+
 android {
     namespace = "com.itantra.voice"
     compileSdk = 36
@@ -31,6 +40,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SARVAM_API_KEY", "\"$sarvamApiKey\"")
+        buildConfigField("boolean", "FORCE_OFFLINE", "$forceOffline")
     }
 
     buildTypes {

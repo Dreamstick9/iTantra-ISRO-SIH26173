@@ -142,3 +142,86 @@ class FallbackSpeechPipelineTest {
         assertEquals(1, remote.releaseCount)
     }
 }
+
+/**
+ * Engine-selection matrix mirroring `MainActivity.buildSpeechPipeline`.
+ *
+ * Regression guard for the configuration that stranded users who had a Sarvam key but no
+ * offline language pack: preferring on-device on a bare `isAvailable()` probe meant the
+ * cloud engine was never reached, because `SpeechRecognizer.isRecognitionAvailable()` is
+ * true on any phone with a recognition service whether or not a pack is installed.
+ */
+class EngineSelectionTest {
+
+    private class Stub(
+        override val displayName: String,
+        override val mode: PipelineMode,
+        private val available: Boolean,
+        override val capturesOwnAudio: Boolean
+    ) : SpeechPipeline {
+        override suspend fun isAvailable() = available
+        override suspend fun transcribe(wavData: ByteArray, source: com.itantra.voice.data.Language) =
+            Result.success(TranscriptionResult(displayName))
+        override suspend fun translate(text: String, source: com.itantra.voice.data.Language, target: com.itantra.voice.data.Language) =
+            Result.success(TranslationResult(displayName))
+        override suspend fun synthesize(text: String, target: com.itantra.voice.data.Language, isEmergency: Boolean) =
+            Result.success(SynthesisResult(ByteArray(0)))
+        override fun release() = Unit
+    }
+
+    /** On-device claims availability even with no language pack — that is the trap. */
+    private fun onDevice() = Stub("On-device", PipelineMode.ON_DEVICE, true, capturesOwnAudio = true)
+    private fun cloud(keyPresent: Boolean) =
+        Stub("Sarvam Cloud", PipelineMode.CLOUD, keyPresent, capturesOwnAudio = false)
+
+    /** Mirrors MainActivity: configuration decides, not a runtime probe. */
+    private fun select(hasKey: Boolean, forceOffline: Boolean): SpeechPipeline {
+        if (forceOffline) return onDevice()
+        return if (hasKey) {
+            FallbackSpeechPipeline(preferred = cloud(true), fallback = onDevice())
+        } else {
+            FallbackSpeechPipeline(preferred = onDevice(), fallback = cloud(false))
+        }
+    }
+
+    @Test
+    fun `a configured key makes the cloud engine lead`() = runTest {
+        val pipeline = select(hasKey = true, forceOffline = false)
+        pipeline.prepare()
+
+        assertEquals("Sarvam Cloud", pipeline.displayName)
+        // Critically: the caller must run AudioRecorder, since the cloud engine needs a WAV.
+        assertFalse(pipeline.capturesOwnAudio)
+    }
+
+    @Test
+    fun `no key means the app runs entirely offline`() = runTest {
+        val pipeline = select(hasKey = false, forceOffline = false)
+        pipeline.prepare()
+
+        assertEquals("On-device", pipeline.displayName)
+        assertTrue(pipeline.capturesOwnAudio)
+    }
+
+    @Test
+    fun `force offline pins the on-device engine even when a key is configured`() = runTest {
+        val pipeline = select(hasKey = true, forceOffline = true)
+        pipeline.prepare()
+
+        assertEquals(PipelineMode.ON_DEVICE, pipeline.mode)
+        assertEquals("On-device", pipeline.displayName)
+    }
+
+    @Test
+    fun `a key still wins even though on-device reports itself available`() = runTest {
+        // The exact stranding case: on-device says "available" because a recognition
+        // service exists, but no language pack is installed. Selection must not consult
+        // that claim when a key was explicitly configured.
+        val offline = onDevice()
+        assertTrue("precondition: on-device claims availability", offline.isAvailable())
+
+        val pipeline = select(hasKey = true, forceOffline = false)
+        pipeline.prepare()
+        assertEquals("Sarvam Cloud", pipeline.displayName)
+    }
+}
