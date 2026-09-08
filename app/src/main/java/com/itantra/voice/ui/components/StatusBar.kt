@@ -25,7 +25,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.itantra.voice.transport.TransportConnectionState
 import com.itantra.voice.ui.theme.Link
+import androidx.compose.ui.platform.testTag
 import com.itantra.voice.ui.theme.Signal
+
+const val ENGINE_LABEL_TAG = "engine_label"
 
 /**
  * Single-line status strip: link state on the left, active speech engine on the right.
@@ -39,7 +42,8 @@ fun StatusBar(
     peerName: String?,
     engineName: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onEngineClick: (() -> Unit)? = null
 ) {
     val isLinked = transportState == TransportConnectionState.CONNECTED
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -65,13 +69,16 @@ fun StatusBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-            .semantics { contentDescription = "Link status: $label" },
+            .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clickable(onClick = onClick)
+                .semantics { contentDescription = "Link status: $label" }
+        ) {
             Box(
                 modifier = Modifier
                     .size(7.dp)
@@ -93,7 +100,18 @@ fun StatusBar(
                 text = engineName.uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
-                maxLines = 1
+                maxLines = 1,
+                modifier = Modifier
+                    .then(
+                        if (onEngineClick != null) {
+                            Modifier
+                                .clickable(onClick = onEngineClick)
+                                .testTag(ENGINE_LABEL_TAG)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .semantics { contentDescription = "Speech engine: $engineName" }
             )
         }
     }

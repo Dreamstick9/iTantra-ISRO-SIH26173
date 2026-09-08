@@ -184,6 +184,25 @@ class MainViewModel(
     }
 
     /**
+     * Re-resolves the speech engine after the operator changes settings, and republishes
+     * its name for the status line.
+     */
+    fun refreshEngine() {
+        val pipeline = speechPipeline ?: return
+        viewModelScope.launch {
+            runCatching { pipeline.prepare() }
+            val available = runCatching { pipeline.isAvailable() }.getOrDefault(false)
+            _uiState.update {
+                it.copy(
+                    engineName = pipeline.displayName,
+                    errorMessage = if (available) null
+                    else "No speech engine is ready. Install an offline voice pack, or set a Sarvam API key."
+                )
+            }
+        }
+    }
+
+    /**
      * Subscribes to a transport engine.
      *
      * Guarded against re-entry: each call previously launched four new collectors, so

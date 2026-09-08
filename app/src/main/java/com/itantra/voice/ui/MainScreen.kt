@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.itantra.voice.transport.TransportConnectionState
 import com.itantra.voice.ui.components.BottomControls
+import com.itantra.voice.ui.components.EngineSheet
 import com.itantra.voice.ui.components.LanguageRow
 import com.itantra.voice.ui.components.LatencyStrip
 import com.itantra.voice.ui.components.NoticeBar
@@ -29,6 +30,19 @@ import com.itantra.voice.ui.components.PairingSheet
 import com.itantra.voice.ui.components.StatusBar
 import com.itantra.voice.ui.components.TalkButton
 import com.itantra.voice.ui.components.TranscriptPanel
+
+/**
+ * Callbacks the screen needs to read and write speech-engine settings.
+ *
+ * Passed in rather than reached through the ViewModel so the ViewModel stays free of
+ * Android storage types. Null when the build is pinned offline at compile time, in which
+ * case there is nothing to configure and the affordance is hidden.
+ */
+data class EngineSettings(
+    val savedKey: () -> String,
+    val preferOffline: () -> Boolean,
+    val save: (key: String, preferOffline: Boolean) -> Unit
+)
 
 /**
  * The whole app: one screen, read top to bottom.
@@ -43,10 +57,12 @@ import com.itantra.voice.ui.components.TranscriptPanel
 fun MainScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
-    onRequirePermission: () -> Unit = {}
+    onRequirePermission: () -> Unit = {},
+    engineSettings: EngineSettings? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showPairing by remember { mutableStateOf(false) }
+    var showEngine by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -63,7 +79,10 @@ fun MainScreen(
                         viewModel.onStartDiscovery()
                     }
                     showPairing = true
-                }
+                },
+                onEngineClick = if (engineSettings != null) {
+                    { showEngine = true }
+                } else null
             )
 
             NoticeBar(
@@ -139,6 +158,20 @@ fun MainScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showEngine && engineSettings != null) {
+        EngineSheet(
+            currentEngine = uiState.engineName,
+            savedKey = engineSettings.savedKey(),
+            preferOffline = engineSettings.preferOffline(),
+            onSave = { key, offline ->
+                engineSettings.save(key, offline)
+                viewModel.refreshEngine()
+                showEngine = false
+            },
+            onDismiss = { showEngine = false }
+        )
     }
 
     if (showPairing) {

@@ -19,14 +19,15 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.itantra.voice.audio.AudioPlayer
 import com.itantra.voice.audio.SystemAlarmVolumeController
-import com.itantra.voice.network.SarvamApiClient
-import com.itantra.voice.pipeline.FallbackSpeechPipeline
+import com.itantra.voice.pipeline.ConfigurableSpeechPipeline
 import com.itantra.voice.pipeline.OnDeviceSpeechPipeline
 import com.itantra.voice.pipeline.SarvamSpeechPipeline
 import com.itantra.voice.pipeline.SpeechPipeline
 import com.itantra.voice.pipeline.recognition.PlatformSpeechRecognizer
 import com.itantra.voice.transport.security.WifiDirectPermissionHelper
 import com.itantra.voice.transport.wifidirect.WifiDirectTransportEngine
+import com.itantra.voice.settings.SettingsStore
+import com.itantra.voice.ui.EngineSettings
 import com.itantra.voice.ui.MainScreen
 import com.itantra.voice.ui.MainViewModel
 import com.itantra.voice.ui.theme.ITantraTheme
@@ -42,6 +43,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var transportEngine: WifiDirectTransportEngine? = null
     private var speechPipeline: SpeechPipeline? = null
+    private lateinit var settings: SettingsStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +59,7 @@ class MainActivity : ComponentActivity() {
                 alarmVolumeController = SystemAlarmVolumeController(applicationContext)
             )
         )
+        settings = SettingsStore(applicationContext)
         viewModel.initFeedbackRepository(filesDir)
         viewModel.setSpeechPipeline(buildSpeechPipeline())
 
@@ -93,6 +96,16 @@ class MainActivity : ComponentActivity() {
                                 WifiDirectPermissionHelper.getAllRequiredPermissions()
                             )
                         },
+                        // A compile-time offline build has no cloud client to configure,
+                        // so the settings affordance is hidden entirely.
+                        engineSettings = if (BuildConfig.FORCE_OFFLINE) null else EngineSettings(
+                            savedKey = { settings.sarvamKey },
+                            preferOffline = { settings.preferOffline },
+                            save = { key, offline ->
+                                settings.sarvamKey = key
+                                settings.preferOffline = offline
+                            }
+                        ),
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
@@ -134,14 +147,18 @@ class MainActivity : ComponentActivity() {
             return onDevice.also { speechPipeline = it }
         }
 
-        val cloud = SarvamSpeechPipeline()
-        val hasCloudKey = !SarvamApiClient.isPlaceholderKey(BuildConfig.SARVAM_API_KEY)
+        // A key entered in the app wins over one baked in at build time, so a single
+        // distributed APK works for an operator who has a key but no offline voice pack.
+        val resolveKey = {
+            settings.sarvamKey.ifBlank { BuildConfig.SARVAM_API_KEY }
+        }
 
-        return if (hasCloudKey) {
-            FallbackSpeechPipeline(preferred = cloud, fallback = onDevice)
-        } else {
-            FallbackSpeechPipeline(preferred = onDevice, fallback = cloud)
-        }.also { speechPipeline = it }
+        return ConfigurableSpeechPipeline(
+            onDevice = onDevice,
+            cloud = SarvamSpeechPipeline(apiKeyProvider = resolveKey),
+            keyProvider = resolveKey,
+            preferOffline = { settings.preferOffline }
+        ).also { speechPipeline = it }
     }
 
     private fun hasMicPermission(): Boolean =
