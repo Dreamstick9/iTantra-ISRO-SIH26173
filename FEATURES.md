@@ -86,8 +86,12 @@ app-privately on that device and are not in the APK.
 >
 > So translation is a separate `Translator` in this app. Add a **Sarvam key alongside**
 > the ElevenLabs one and ElevenLabs handles recognition and voice while Sarvam handles
-> translation. With no Sarvam key the message is relayed in the language it was spoken —
-> the transceiver still works, it just does not translate.
+> translation.
+>
+> With no Sarvam key the message is **relayed in the language it was spoken** — the
+> transceiver still works, it just does not translate. The output is labelled
+> `RELAYED · HINDI · NOT TRANSLATED` rather than claiming English, and the far handset
+> synthesises in the source language so the words are pronounced correctly.
 
 **Force offline:** the same sheet has a switch that pins the offline engine. For a
 provably air-gapped build, set `itantra.force.offline=true` in `local.properties` — then
@@ -228,7 +232,7 @@ Light and dark themes both supported.
 ## Verified
 
 ```
-unit           250 tests  0 failures  [PASS]
+unit           255 tests  0 failures  [PASS]
 instrumented    10 tests  0 failures  [PASS]
 lint clean
 ```

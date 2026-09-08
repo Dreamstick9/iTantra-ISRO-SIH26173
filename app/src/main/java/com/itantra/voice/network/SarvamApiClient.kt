@@ -73,7 +73,7 @@ class SarvamApiClient(
                 val apiKey = apiKeyProvider().trim()
                 if (isPlaceholderKey(apiKey)) {
                     throw SarvamApiException.AuthenticationException(
-                        "Sarvam AI API key is missing. Please add SARVAM_API_KEY to local.properties."
+                        "Sarvam API key is missing. Add one in the app: tap the engine name at the top of the screen."
                     )
                 }
                 val request = chain.request().newBuilder()

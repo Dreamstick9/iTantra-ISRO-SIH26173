@@ -14,8 +14,13 @@ data class TranscriptionResult(val transcript: String)
 
 /**
  * Result of a translation stage.
+ *
+ * @param text the text to speak on the far handset
+ * @param translated false when the text was relayed unchanged because no translator was
+ *        configured. The UI uses this to label the output with the language it is
+ *        actually in, rather than claiming a translation that did not happen.
  */
-data class TranslationResult(val text: String)
+data class TranslationResult(val text: String, val translated: Boolean = true)
 
 /**
  * Result of a speech synthesis stage.

@@ -84,7 +84,13 @@ data class MainUiState(
     /** Position carried by the last received message, or null if it had none. */
     val senderLocation: GeoPoint? = null,
     /** True when location is being attached to outgoing transmissions. */
-    val locationSharingEnabled: Boolean = true
+    val locationSharingEnabled: Boolean = true,
+    /**
+     * True when the last utterance was relayed in the source language because no
+     * translator was configured. The output label reflects this rather than claiming a
+     * translation that did not happen.
+     */
+    val translationSkipped: Boolean = false
 ) {
     /**
      * Distance and compass bearing from here to the sender, e.g. `1.2 km NE`.
@@ -387,6 +393,7 @@ class MainViewModel(
                 hasAudioToReplay = false,
                 isRemoteMessage = false,
                 isAlertPlaying = false,
+                translationSkipped = false,
                 // A new transmission replaces the received one; keeping the old sender's
                 // position on screen would be actively dangerous in a rescue context.
                 senderLocation = null
@@ -517,13 +524,17 @@ class MainViewModel(
         val transResult = pipeline.translate(transcript, sourceLang, targetLang)
         val translateMs = (timeProvider() - transStart).coerceAtLeast(0)
 
-        val translated = transResult.getOrElse { error ->
+        val translation = transResult.getOrElse { error ->
             setError(
                 error.message ?: "Translation failed",
                 LatencyStats(sttMs = sttMs, translateMs = translateMs)
             )
             return
-        }.text.trim()
+        }
+        val translated = translation.text.trim()
+        // When nothing translated it, the far handset must speak it in the language it
+        // was actually said in, or the synthesiser mispronounces every word.
+        val spokenLanguage = if (translation.translated) targetLang else sourceLang
 
         // 3. Transmit to the paired phone before synthesising locally
         var netMs: Long? = null
@@ -532,7 +543,7 @@ class MainViewModel(
             val base = TransportMessage(
                 type = if (isEmergency) TransportMessageType.ALERT else TransportMessageType.TRANSLATION,
                 sourceLanguage = sourceLang.bcp47Code,
-                targetLanguage = targetLang.bcp47Code,
+                targetLanguage = spokenLanguage.bcp47Code,
                 text = translated,
                 priority = if (isEmergency) 1 else 0
             )
@@ -560,13 +571,14 @@ class MainViewModel(
                 state = PttState.SYNTHESIZING,
                 translatedText = translated,
                 isRemoteMessage = false,
+                translationSkipped = !translation.translated,
                 latencies = LatencyStats(sttMs = sttMs, translateMs = translateMs, netMs = netMs)
             )
         }
 
         // 4. Synthesis
         val ttsStart = timeProvider()
-        val ttsResult = pipeline.synthesize(translated, targetLang, isEmergency)
+        val ttsResult = pipeline.synthesize(translated, spokenLanguage, isEmergency)
         val ttsMs = (timeProvider() - ttsStart).coerceAtLeast(0)
 
         val finalLatencies = LatencyStats(

@@ -49,7 +49,8 @@ fun TranscriptPanel(
     onReplay: () -> Unit,
     modifier: Modifier = Modifier,
     senderLocation: com.itantra.voice.location.GeoPoint? = null,
-    bearingToSender: String? = null
+    bearingToSender: String? = null,
+    translationSkipped: Boolean = false
 ) {
     Column(
         modifier = modifier
@@ -86,7 +87,13 @@ fun TranscriptPanel(
             verticalAlignment = Alignment.Top
         ) {
             TranscriptBlock(
-                label = if (isAlert) "EMERGENCY ALERT" else "SPEAKING · ${targetLanguage.displayName.uppercase()}",
+                label = when {
+                    isAlert -> "EMERGENCY ALERT"
+                    // Say "relayed" rather than "speaking English" when nothing translated
+                    // it: the text is still in the source language.
+                    translationSkipped -> "RELAYED · ${sourceLanguage.displayName.uppercase()} · NOT TRANSLATED"
+                    else -> "SPEAKING · ${targetLanguage.displayName.uppercase()}"
+                },
                 labelColor = if (isAlert) Signal else MaterialTheme.colorScheme.onSurfaceVariant,
                 text = outputText,
                 placeholder = "The translation appears here.",

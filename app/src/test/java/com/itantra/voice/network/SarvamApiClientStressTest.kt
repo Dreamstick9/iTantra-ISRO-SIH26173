@@ -807,7 +807,16 @@ class SarvamApiClientStressTest {
                 org.junit.Assert.fail("Expected AuthenticationException for placeholder '$placeholder'")
             } catch (e: Exception) {
                 assertTrue("Expected AuthenticationException for '$placeholder', got $e", e is SarvamApiException.AuthenticationException)
-                assertTrue(e.message!!.contains("SARVAM_API_KEY"))
+                // The message must name the provider and point somewhere actionable.
+                // It used to say "add SARVAM_API_KEY to local.properties", which is now
+                // wrong guidance: keys are entered in the app's engine settings.
+                val message = e.message!!
+                assertTrue("should name the provider: $message", message.contains("Sarvam"))
+                assertTrue("should say the key is missing: $message", message.contains("missing"))
+                assertTrue(
+                    "should point at the in-app settings, not local.properties: $message",
+                    message.contains("in the app")
+                )
             }
         }
     }

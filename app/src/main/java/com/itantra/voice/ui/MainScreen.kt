@@ -119,7 +119,8 @@ fun MainScreen(
                     canReplay = uiState.hasAudioToReplay,
                     onReplay = viewModel::onReplayAudio,
                     senderLocation = uiState.senderLocation,
-                    bearingToSender = uiState.bearingToSender
+                    bearingToSender = uiState.bearingToSender,
+                    translationSkipped = uiState.translationSkipped
                 )
             }
 

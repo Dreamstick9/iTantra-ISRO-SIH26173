@@ -73,7 +73,19 @@ class ElevenLabsSpeechPipeline(
         target: Language
     ): Result<TranslationResult> {
         if (source == target) return Result.success(TranslationResult(text))
-        return translator.translate(text, source, target).map { TranslationResult(it) }
+
+        // Check the translator is actually configured before calling it. Without this an
+        // ElevenLabs-only setup reached Sarvam's auth interceptor and failed the whole
+        // utterance with "add SARVAM_API_KEY to local.properties" — an error about a
+        // provider the operator never chose, for a stage ElevenLabs cannot serve at all.
+        // Relaying the words untranslated is far better than delivering nothing.
+        if (!translator.isAvailable()) {
+            log.info("No translator configured; relaying text in $source")
+            return Result.success(TranslationResult(text, translated = false))
+        }
+
+        return translator.translate(text, source, target)
+            .map { TranslationResult(it, translated = true) }
     }
 
     override suspend fun synthesize(

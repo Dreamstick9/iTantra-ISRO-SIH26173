@@ -118,7 +118,8 @@ class OnDeviceSpeechPipeline(
         text: String,
         source: Language,
         target: Language
-    ): Result<TranslationResult> = Result.success(TranslationResult(text))
+    ): Result<TranslationResult> =
+        Result.success(TranslationResult(text, translated = source == target))
 
     override suspend fun synthesize(
         text: String,

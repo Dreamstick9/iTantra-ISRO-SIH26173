@@ -40,7 +40,10 @@ interface Translator {
  */
 object PassThroughTranslator : Translator {
     override val displayName: String = "None"
-    override suspend fun isAvailable(): Boolean = true
+
+    // Reports false so callers treat it as "no translator configured" and label the
+    // output with the language the text is actually in.
+    override suspend fun isAvailable(): Boolean = false
     override suspend fun translate(text: String, source: Language, target: Language): Result<String> =
         Result.success(text)
 }
